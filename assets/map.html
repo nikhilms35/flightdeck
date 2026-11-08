@@ -1,0 +1,163 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<script src="leaflet/leaflet.js"></script>
+<script src="qwebchannel.js"></script>
+<style>
+  html, body, #map { margin: 0; height: 100%; background: #0B0F14; }
+  .leaflet-container { font-family: Inter, sans-serif; background: #0B0F14; }
+  .leaflet-control-layers, .leaflet-bar a, .leaflet-control-attribution {
+    background: rgba(17,22,29,.92) !important; color: #C9D3DD !important; border-color: #242D3A !important; }
+  .leaflet-control-attribution a { color: #8FB8FF !important; }
+  .leaflet-bar { border: 1px solid #242D3A !important; border-radius: 8px !important; overflow: hidden; }
+  .leaflet-control-layers { border-radius: 8px !important; }
+  .wp { width: 26px; height: 26px; border-radius: 13px; background: #3D8BFD; color: #fff;
+        font: 700 11px/26px "JetBrains Mono", monospace; text-align: center;
+        border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); }
+  .wp.takeoff { background: #2FBF71; } .wp.land { background: #F05A52; } .wp.loiter { background: #E8A93A; }
+  .home { width: 24px; height: 24px; border-radius: 6px; background: #E8A93A; color: #111;
+          font: 800 12px/24px Inter, sans-serif; text-align: center; border: 2px solid #fff; }
+  .hint { position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%); top: 12px;
+          background: rgba(17,22,29,.92); color: #C9D3DD; padding: 6px 12px; border-radius: 16px;
+          font: 600 12px Inter, sans-serif; border: 1px solid #242D3A; display: none; }
+  .follow { position: absolute; z-index: 1000; right: 10px; bottom: 28px; background: rgba(17,22,29,.92);
+            color: #C9D3DD; border: 1px solid #242D3A; padding: 6px 10px; border-radius: 8px;
+            font: 600 12px Inter, sans-serif; cursor: pointer; user-select: none; }
+  .follow.on { color: #5C9FFF; border-color: #23426B; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="hint" id="hint">Click the map to add a waypoint · drag markers to move them</div>
+<div class="follow on" id="follow">● Follow drone</div>
+<script>
+const map = L.map('map', {zoomControl: true, attributionControl: true}).setView([20, 78], 4);
+// All tiles come through FlightDeck's local caching server (online: live + saved; offline: saved only).
+// A missing tile is a 404, and we then show the nearest lower zoom level, scaled up.
+const T = new URLSearchParams(location.search).get('t') || '';
+const URLS = {esri: T + '/t/esri/{z}/{x}/{y}', osm: T + '/t/osm/{z}/{x}/{y}', carto: T + '/t/carto/{z}/{x}/{y}'};
+function withFallback(layer, url, maxSteps) {
+  layer.on('tileerror', e => {
+    const img = e.tile, c = e.coords;
+    const z = (img._fbz === undefined ? c.z : img._fbz) - 1;
+    if (z < 0 || c.z - z > maxSteps) return;
+    img._fbz = z;
+    const k = 2 ** (c.z - z), fx = Math.floor(c.x / k), fy = Math.floor(c.y / k), s = 256;
+    const ox = (c.x - fx * k) * s, oy = (c.y - fy * k) * s;
+    img.style.width = img.style.height = (s * k) + 'px';
+    img.style.marginLeft = -ox + 'px';
+    img.style.marginTop = -oy + 'px';
+    // show only this tile's 256px window of the enlarged parent, so neighbours aren't covered
+    img.style.clipPath = `inset(${oy}px ${s * k - ox - s}px ${s * k - oy - s}px ${ox}px)`;
+    img.src = L.Util.template(url, {z, x: fx, y: fy, s: 'a', r: ''});
+  });
+  return layer;
+}
+URLS.maptiler = T + '/t/maptiler/{z}/{x}/{y}';
+URLS.s2 = T + '/t/s2/{z}/{x}/{y}';
+const layers = {
+  'Satellite (Esri)': withFallback(L.tileLayer(URLS.esri, {maxZoom: 21, maxNativeZoom: 19, attribution: 'Imagery © Esri'}), URLS.esri, 8),
+  'Satellite HD (MapTiler)': withFallback(L.tileLayer(URLS.maptiler, {maxZoom: 21, maxNativeZoom: 20,
+      attribution: '© MapTiler © OpenStreetMap contributors'}), URLS.maptiler, 8),
+  'Satellite (Sentinel-2, 10 m)': L.tileLayer(URLS.s2, {maxZoom: 21, maxNativeZoom: 14,
+      attribution: 'Sentinel-2 cloudless 2016 by EOX (CC BY 4.0), contains Copernicus data'}),
+  'Streets': withFallback(L.tileLayer(URLS.osm, {maxZoom: 21, maxNativeZoom: 19, attribution: '© OpenStreetMap contributors'}), URLS.osm, 8),
+  'Dark': withFallback(L.tileLayer(URLS.carto, {maxZoom: 21, maxNativeZoom: 20, attribution: '© OpenStreetMap © CARTO'}), URLS.carto, 8),
+};
+// provider id (used by FlightDeck) -> layer name
+const BY_ID = {esri: 'Satellite (Esri)', maptiler: 'Satellite HD (MapTiler)', s2: 'Satellite (Sentinel-2, 10 m)', osm: 'Streets'};
+let currentBase = 'Satellite (Esri)';
+layers[currentBase].addTo(map);
+L.control.layers(layers, null, {position: 'topright'}).addTo(map);
+let programmatic = false, manual = false;
+map.on('baselayerchange', e => { currentBase = e.name; if (!programmatic) manual = true; });
+function setBase(name) {
+  if (!layers[name] || name === currentBase) return;
+  programmatic = true;
+  map.removeLayer(layers[currentBase]); layers[name].addTo(map); currentBase = name;
+  map.fire('baselayerchange', {name, layer: layers[name]});
+  programmatic = false;
+}
+// FlightDeck picks the best working satellite source, unless you chose a layer yourself
+function autoBase(id) { if (!manual && BY_ID[id]) setBase(BY_ID[id]); }
+function getBase() { return currentBase; }
+L.control.scale({imperial: false}).addTo(map);
+function getBounds() { const b = map.getBounds(); return [b.getSouth(), b.getWest(), b.getNorth(), b.getEast(), map.getZoom()]; }
+
+let bridge = null;
+map.on('contextmenu', e => { if (bridge) bridge.mapContext(e.latlng.lat, e.latlng.lng); });
+
+// ---- geofence circle & guided target ----
+let fence = null, target = null;
+function setFence(lat, lon, r) {
+  if (!fence) fence = L.circle([lat, lon], {radius: r, color: '#F05A52', weight: 2, dashArray: '8 6', fillOpacity: 0.04, interactive: false}).addTo(map);
+  else { fence.setLatLng([lat, lon]); fence.setRadius(r); }
+}
+function clearFence() { if (fence) { map.removeLayer(fence); fence = null; } }
+function setTarget(lat, lon) {
+  const icon = L.divIcon({html: '<div style="width:18px;height:18px;border-radius:9px;border:3px solid #E8A93A;background:rgba(232,169,58,.25)"></div>', className: '', iconSize: [18, 18], iconAnchor: [9, 9]});
+  if (!target) target = L.marker([lat, lon], {icon, interactive: false}).addTo(map); else target.setLatLng([lat, lon]);
+}
+function clearTarget() { if (target) { map.removeLayer(target); target = null; } }
+new QWebChannel(qt.webChannelTransport, ch => { bridge = ch.objects.bridge; bridge.ready(); });
+
+// ---- vehicle ----
+const droneSvg = h => `<svg width="40" height="40" viewBox="-20 -20 40 40" style="transform:rotate(${h}deg)">
+  <circle r="17" fill="rgba(61,139,253,.18)" stroke="rgba(61,139,253,.6)"/>
+  <path d="M0,-13 L9,10 L0,5 L-9,10 Z" fill="#3D8BFD" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>`;
+let drone = null, trail = L.polyline([], {color: '#5C9FFF', weight: 2.5, opacity: .8}).addTo(map);
+let follow = true, centeredOnce = false;
+const followBtn = document.getElementById('follow');
+followBtn.onclick = () => { follow = !follow; followBtn.classList.toggle('on', follow); };
+map.on('dragstart', () => { if (follow) { follow = false; followBtn.classList.remove('on'); } });
+
+function setVehicle(lat, lon, hdg) {
+  const icon = L.divIcon({html: droneSvg(hdg), className: '', iconSize: [40, 40], iconAnchor: [20, 20]});
+  if (!drone) drone = L.marker([lat, lon], {icon, interactive: false, zIndexOffset: 1000}).addTo(map);
+  else { drone.setLatLng([lat, lon]); drone.setIcon(icon); }
+  const pts = trail.getLatLngs();
+  const last = pts[pts.length - 1];
+  if (!last || map.distance(last, [lat, lon]) > 0.7) { trail.addLatLng([lat, lon]); if (pts.length > 3000) pts.shift(); }
+  if (!centeredOnce) { map.setView([lat, lon], 18); centeredOnce = true; }
+  else if (follow) map.panTo([lat, lon], {animate: false});
+}
+function clearTrail() { trail.setLatLngs([]); }
+
+let home = null;
+function setHome(lat, lon) {
+  const icon = L.divIcon({html: '<div class="home">H</div>', className: '', iconSize: [24, 24], iconAnchor: [12, 12]});
+  if (!home) home = L.marker([lat, lon], {icon, interactive: false}).addTo(map); else home.setLatLng([lat, lon]);
+}
+
+// ---- planning ----
+let planMode = false, wpMarkers = [], wpLine = L.polyline([], {color: '#E8A93A', weight: 3, dashArray: '6 6'}).addTo(map);
+function setPlanMode(on) {
+  planMode = on; document.getElementById('hint').style.display = on ? 'block' : 'none';
+  followBtn.style.display = on ? 'none' : 'block'; if (on) follow = false;
+}
+map.on('click', e => { if (planMode && bridge) bridge.mapClicked(e.latlng.lat, e.latlng.lng); });
+
+function setWaypoints(list) {   // list: [{lat, lon, label, kind}]
+  wpMarkers.forEach(m => map.removeLayer(m)); wpMarkers = [];
+  const path = [];
+  list.forEach((w, i) => {
+    if (w.lat === 0 && w.lon === 0) return;
+    const icon = L.divIcon({html: `<div class="wp ${w.kind||''}">${w.label}</div>`, className: '', iconSize: [26, 26], iconAnchor: [13, 13]});
+    const m = L.marker([w.lat, w.lon], {icon, draggable: planMode}).addTo(map);
+    m.on('dragend', ev => { const p = ev.target.getLatLng(); bridge && bridge.markerMoved(i, p.lat, p.lng); });
+    wpMarkers.push(m); path.push([w.lat, w.lon]);
+  });
+  if (home && path.length) path.unshift(home.getLatLng());
+  wpLine.setLatLngs(path);
+}
+function fitWaypoints() {
+  const pts = wpMarkers.map(m => m.getLatLng());
+  if (drone) pts.push(drone.getLatLng());
+  if (pts.length) map.fitBounds(L.latLngBounds(pts).pad(0.25), {maxZoom: 18});
+}
+function centerOn(lat, lon, z) { map.setView([lat, lon], z || map.getZoom()); }
+</script>
+</body>
+</html>

@@ -1,0 +1,273 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<script>window.CESIUM_BASE_URL = 'cesium/';</script>
+<script src="cesium/Cesium.js"></script>
+<link rel="stylesheet" href="cesium/Widgets/widgets.css">
+<script src="qwebchannel.js"></script>
+<style>
+  html, body, #v { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0B0F14; }
+  .cesium-viewer-bottom { opacity: .75; }
+  #hud { position: absolute; left: 12px; top: 12px; z-index: 10; background: rgba(11,15,20,.82);
+         border: 1px solid #242D3A; border-radius: 10px; padding: 8px 12px; color: #E6EDF3;
+         font: 600 12px/1.5 "JetBrains Mono", monospace; pointer-events: none; white-space: pre; }
+  #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
+           z-index: 10; pointer-events: none; display: none; }
+  #cross:before, #cross:after { content: ''; position: absolute; background: rgba(255,255,255,.75); }
+  #cross:before { left: 10px; top: 0; width: 2px; height: 22px; } #cross:after { top: 10px; left: 0; height: 2px; width: 22px; }
+</style>
+</head>
+<body>
+<div id="v"></div>
+<div id="hud">3D view</div>
+<div id="cross"></div>
+<script>
+const T = new URLSearchParams(location.search).get('t') || '';
+let bridge = null;
+const say = (o) => { if (bridge) bridge.say(JSON.stringify(o)); };
+
+// ---------- imagery (Esri via local cache; Cesium falls back to parent tiles on 404) ----------
+const IMG = {
+  esri: new Cesium.UrlTemplateImageryProvider({url: T + '/t/esri/{z}/{x}/{y}', maximumLevel: 19,
+                                               credit: new Cesium.Credit('Imagery © Esri')}),
+  osm: new Cesium.UrlTemplateImageryProvider({url: T + '/t/osm/{z}/{x}/{y}', maximumLevel: 19,
+                                              credit: new Cesium.Credit('© OpenStreetMap contributors')}),
+  maptiler: new Cesium.UrlTemplateImageryProvider({url: T + '/t/maptiler/{z}/{x}/{y}', maximumLevel: 20,
+                                              credit: new Cesium.Credit('© MapTiler © OpenStreetMap contributors')}),
+  s2: new Cesium.UrlTemplateImageryProvider({url: T + '/t/s2/{z}/{x}/{y}', maximumLevel: 14,
+                                              credit: new Cesium.Credit('Sentinel-2 cloudless 2016 by EOX (CC BY 4.0)')}),
+};
+const imagery = IMG.esri;
+function setImagery(name) {
+  viewer.imageryLayers.removeAll();
+  viewer.imageryLayers.addImageryProvider(IMG[name] || IMG.esri);
+}
+
+// ---------- terrain: AWS Terrarium PNG tiles decoded in the browser ----------
+const TS = new Cesium.WebMercatorTilingScheme();
+const W = 65, TMAX = 14;
+const tcache = new Map();
+function loadTerr(z, x, y) {
+  const key = z + '/' + x + '/' + y;
+  if (tcache.has(key)) return tcache.get(key);
+  const p = new Promise(res => {
+    const im = new Image(); im.crossOrigin = 'anonymous';
+    im.onload = () => {
+      const c = document.createElement('canvas'); c.width = c.height = 256;
+      const g = c.getContext('2d', {willReadFrequently: true}); g.drawImage(im, 0, 0);
+      const d = g.getImageData(0, 0, 256, 256).data, h = new Float32Array(65536);
+      for (let i = 0; i < 65536; i++) h[i] = d[4*i] * 256 + d[4*i+1] + d[4*i+2] / 256 - 32768;
+      res(h);
+    };
+    im.onerror = () => res(null);
+    im.src = `${T}/t/terrain/${z}/${x}/${y}`;
+  });
+  tcache.set(key, p);
+  if (tcache.size > 400) tcache.delete(tcache.keys().next().value);
+  return p;
+}
+function bilinear(h, u, v) {
+  u = Math.min(Math.max(u, 0), 255); v = Math.min(Math.max(v, 0), 255);
+  const x0 = Math.floor(u), y0 = Math.floor(v), x1 = Math.min(x0 + 1, 255), y1 = Math.min(y0 + 1, 255);
+  const fx = u - x0, fy = v - y0;
+  return (h[y0*256+x0] * (1-fx) + h[y0*256+x1] * fx) * (1-fy) + (h[y1*256+x0] * (1-fx) + h[y1*256+x1] * fx) * fy;
+}
+async function heights(x, y, level) {
+  const out = new Float32Array(W * W);
+  for (let z = Math.min(level, TMAX); z >= 0; z--) {        // walk up until a tile exists (offline-safe)
+    const k = 2 ** (level - z), px = Math.floor(x / k), py = Math.floor(y / k);
+    const src = await loadTerr(z, px, py);
+    if (!src) continue;
+    const span = 256 / k, ox = (x - px * k) * span, oy = (y - py * k) * span;
+    for (let j = 0; j < W; j++) for (let i = 0; i < W; i++)
+      out[j*W+i] = bilinear(src, ox + i * span / (W - 1), oy + j * span / (W - 1));
+    return out;
+  }
+  return out;
+}
+const terrain = new Cesium.CustomHeightmapTerrainProvider({width: W, height: W, tilingScheme: TS, callback: heights});
+const flat = new Cesium.EllipsoidTerrainProvider();
+
+const viewer = new Cesium.Viewer('v', {
+  baseLayer: new Cesium.ImageryLayer(imagery), terrainProvider: terrain,
+  baseLayerPicker: false, geocoder: false, homeButton: false, sceneModePicker: false,
+  navigationHelpButton: false, animation: false, timeline: false, fullscreenButton: false,
+  infoBox: false, selectionIndicator: false, scene3DOnly: true,
+});
+const scene = viewer.scene;
+scene.globe.depthTestAgainstTerrain = true;
+scene.globe.maximumScreenSpaceError = 1.5;
+scene.fog.enabled = true;
+viewer.camera.setView({destination: Cesium.Cartesian3.fromDegrees(78, 20, 3e6)});
+
+// ---------- ground height (cached) ----------
+let terrainOn = true;
+const gcache = new Map();
+async function groundAt(lat, lon) {
+  if (!terrainOn) return 0;
+  const key = lat.toFixed(4) + ',' + lon.toFixed(4);
+  if (gcache.has(key)) return gcache.get(key);
+  let h = 0;
+  try { const r = await Cesium.sampleTerrain(terrain, 13, [Cesium.Cartographic.fromDegrees(lon, lat)]); h = r[0].height || 0; }
+  catch (e) { h = 0; }
+  gcache.set(key, h);
+  return h;
+}
+function setTerrain(on) {
+  terrainOn = on; gcache.clear();
+  viewer.terrainProvider = on ? terrain : flat;
+  refreshHome().then(redrawMission);
+}
+
+// ---------- state ----------
+let mode = 'preview';            // preview | fpv | chase | flythrough | free
+let home = null, homeGround = 0;
+let drone = null;                // {lat, lon, alt, hdg, pitch, roll}
+let preview = {lat: null, lon: null, alt: 30, hdg: 0, tilt: -20};
+let fov = 110, camUptilt = 20;
+const hud = document.getElementById('hud');
+
+async function refreshHome() { if (home) homeGround = await groundAt(home.lat, home.lon); }
+function setHome(lat, lon) {
+  const changed = !home || Math.abs(home.lat - lat) > 1e-6 || Math.abs(home.lon - lon) > 1e-6;
+  home = {lat, lon};
+  if (changed) refreshHome().then(() => { drawHome(); redrawMission(); });
+}
+let homeEnt = null;
+function drawHome() {
+  if (!home) return;
+  if (homeEnt) viewer.entities.remove(homeEnt);
+  homeEnt = viewer.entities.add({position: Cesium.Cartesian3.fromDegrees(home.lon, home.lat, homeGround),
+    point: {pixelSize: 12, color: Cesium.Color.fromCssColorString('#E8A93A'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY},
+    label: {text: 'H', font: '700 13px Inter', fillColor: Cesium.Color.BLACK, pixelOffset: new Cesium.Cartesian2(0, 0),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY, showBackground: false}});
+}
+
+// ---------- drone entity ----------
+const droneEnt = viewer.entities.add({
+  show: false,
+  position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
+  point: {pixelSize: 14, color: Cesium.Color.fromCssColorString('#3D8BFD'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY},
+});
+const stalk = viewer.entities.add({show: false, polyline: {positions: [], width: 1.5,
+  material: Cesium.Color.fromCssColorString('#3D8BFD').withAlpha(0.6)}});
+function setVehicle(lat, lon, alt, hdg, pitch, roll) {
+  drone = {lat, lon, alt, hdg, pitch, roll};
+  if (!home) return;
+  const abs = homeGround + alt;
+  droneEnt.show = stalk.show = mode !== 'fpv';
+  droneEnt.position = Cesium.Cartesian3.fromDegrees(lon, lat, abs);
+  stalk.polyline.positions = Cesium.Cartesian3.fromDegreesArrayHeights([lon, lat, abs, lon, lat, homeGround - 50]);
+  if (mode === 'fpv') camAt(lat, lon, abs, hdg, pitch + camUptilt, -roll);
+  else if (mode === 'chase') {
+    const back = 18, up = 7, h = Cesium.Math.toRadians(hdg);
+    const dLat = -back * Math.cos(h) / 111320, dLon = -back * Math.sin(h) / (111320 * Math.cos(lat * Math.PI / 180));
+    camAt(lat + dLat, lon + dLon, abs + up, hdg, -20, 0);
+  }
+  if (mode === 'fpv' || mode === 'chase') hudText(`${mode.toUpperCase()}  alt ${alt.toFixed(1)} m  hdg ${Math.round(hdg)}°`);
+}
+
+function camAt(lat, lon, absH, hdg, pitchDeg, rollDeg) {
+  viewer.camera.setView({destination: Cesium.Cartesian3.fromDegrees(lon, lat, absH),
+    orientation: {heading: Cesium.Math.toRadians(hdg), pitch: Cesium.Math.toRadians(pitchDeg), roll: Cesium.Math.toRadians(rollDeg || 0)}});
+}
+function hudText(t) { hud.textContent = t; }
+function setFov(deg) { fov = deg; viewer.camera.frustum.fov = Cesium.Math.toRadians(Math.min(deg, 150)); }
+function setUptilt(deg) { camUptilt = deg; }
+
+// ---------- preview ----------
+async function setPreview(lat, lon, alt, hdg, tilt) {
+  preview = {lat, lon, alt, hdg, tilt};
+  if (mode !== 'preview' || lat === null || lat === undefined) return;
+  const ref = home ? homeGround : await groundAt(lat, lon);
+  const here = await groundAt(lat, lon);
+  const abs = ref + alt;
+  camAt(lat, lon, abs, hdg, tilt, 0);
+  const agl = abs - here;
+  hudText(`PREVIEW  ${alt.toFixed(0)} m above ${home ? 'home' : 'ground'}\n` +
+          `height above ground here: ${agl.toFixed(0)} m\n` +
+          `camera tilt ${tilt.toFixed(0)}°   heading ${Math.round(hdg)}°   FOV ${fov}°`);
+  say({type: 'preview', agl, ground: here});
+}
+
+// ---------- mission ----------
+let mission = [], missionEnts = [];
+function setMission(list) { mission = list; redrawMission(); }
+async function redrawMission() {
+  missionEnts.forEach(e => viewer.entities.remove(e)); missionEnts = [];
+  const pts = mission.filter(w => w.lat || w.lon);
+  if (!pts.length) { say({type: 'clearance', rows: []}); return; }
+  const ref = home ? homeGround : await groundAt(pts[0].lat, pts[0].lon);
+  const rows = [], path = [];
+  if (home) path.push(home.lon, home.lat, homeGround + (pts[0].alt || 0));
+  for (const [i, w] of pts.entries()) {
+    const g = await groundAt(w.lat, w.lon), abs = ref + w.alt, clr = abs - g;
+    rows.push({n: w.n, alt: w.alt, clearance: clr});
+    path.push(w.lon, w.lat, abs);
+    const col = clr < 10 ? '#F05A52' : clr < 20 ? '#E8A93A' : '#3D8BFD';
+    missionEnts.push(viewer.entities.add({position: Cesium.Cartesian3.fromDegrees(w.lon, w.lat, abs),
+      point: {pixelSize: 11, color: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.WHITE, outlineWidth: 2},
+      label: {text: String(w.n), font: '700 13px Inter', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 3, style: Cesium.LabelStyle.FILL_AND_OUTLINE, pixelOffset: new Cesium.Cartesian2(0, -18)}}));
+    missionEnts.push(viewer.entities.add({polyline: {positions: Cesium.Cartesian3.fromDegreesArrayHeights([w.lon, w.lat, abs, w.lon, w.lat, g]),
+      width: 1.5, material: Cesium.Color.fromCssColorString(col).withAlpha(0.7)}}));
+  }
+  missionEnts.push(viewer.entities.add({polyline: {positions: Cesium.Cartesian3.fromDegreesArrayHeights(path), width: 3,
+    material: new Cesium.PolylineDashMaterialProperty({color: Cesium.Color.fromCssColorString('#E8A93A')})}}));
+  say({type: 'clearance', rows});
+}
+
+// ---------- fly-through ----------
+let flyTimer = null;
+async function flyThrough(speed, tilt) {
+  stopFly();
+  const pts = mission.filter(w => w.lat || w.lon);
+  if (pts.length < 1) { say({type: 'info', text: 'Add waypoints on the Plan screen first.'}); return; }
+  const ref = home ? homeGround : await groundAt(pts[0].lat, pts[0].lon);
+  const legs = [];
+  const start = home ? {lat: home.lat, lon: home.lon, alt: pts[0].alt} : pts[0];
+  let prev = start;
+  for (const p of pts) { legs.push([prev, p]); prev = p; }
+  if (home) legs.push([prev, {lat: home.lat, lon: home.lon, alt: prev.alt}]);
+  const dist = (a, b) => Cesium.Cartesian3.distance(Cesium.Cartesian3.fromDegrees(a.lon, a.lat, 0), Cesium.Cartesian3.fromDegrees(b.lon, b.lat, 0));
+  const bearing = (a, b) => {
+    const f1 = a.lat * Math.PI / 180, f2 = b.lat * Math.PI / 180, dl = (b.lon - a.lon) * Math.PI / 180;
+    return (Math.atan2(Math.sin(dl) * Math.cos(f2), Math.cos(f1) * Math.sin(f2) - Math.sin(f1) * Math.cos(f2) * Math.cos(dl)) * 180 / Math.PI + 360) % 360;
+  };
+  mode = 'flythrough';
+  let leg = 0, t0 = performance.now(), hdg = bearing(...legs[0]);
+  const step = () => {
+    if (mode !== 'flythrough') return;
+    const [a, b] = legs[leg], d = Math.max(dist(a, b), 0.1), dur = d / speed * 1000;
+    const f = Math.min((performance.now() - t0) / dur, 1);
+    const lat = a.lat + (b.lat - a.lat) * f, lon = a.lon + (b.lon - a.lon) * f, alt = a.alt + (b.alt - a.alt) * f;
+    const want = d > 1 ? bearing(a, b) : hdg;
+    let diff = ((want - hdg + 540) % 360) - 180; hdg = (hdg + diff * 0.08 + 360) % 360;   // smooth turns
+    camAt(lat, lon, ref + alt, hdg, tilt, 0);
+    hudText(`FLY-THROUGH  leg ${leg + 1}/${legs.length}\nalt ${alt.toFixed(0)} m   ${speed} m/s   tilt ${tilt}°`);
+    if (f >= 1) { leg++; t0 = performance.now(); if (leg >= legs.length) { mode = 'preview'; say({type: 'flydone'}); return; } }
+    flyTimer = requestAnimationFrame(step);
+  };
+  flyTimer = requestAnimationFrame(step);
+}
+function stopFly() { if (flyTimer) cancelAnimationFrame(flyTimer); flyTimer = null; if (mode === 'flythrough') mode = 'preview'; }
+
+function setMode(m) {
+  stopFly(); mode = m;
+  const free = m === 'free';
+  const c = scene.screenSpaceCameraController;
+  c.enableRotate = c.enableTranslate = c.enableZoom = c.enableTilt = c.enableLook = free;
+  document.getElementById('cross').style.display = (m === 'fpv' || m === 'preview') ? 'block' : 'none';
+  if (free) hudText('FREE LOOK  drag to rotate · scroll to zoom · ctrl-drag to tilt');
+  if (m === 'preview') setPreview(preview.lat, preview.lon, preview.alt, preview.hdg, preview.tilt);
+}
+
+new QWebChannel(qt.webChannelTransport, ch => { bridge = ch.objects.bridge; bridge.ready(); });
+setFov(110);
+setMode('preview');
+</script>
+</body>
+</html>
