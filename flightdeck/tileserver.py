@@ -31,7 +31,7 @@ PROVIDERS = {
 NEEDS_KEY = {"maptiler"}
 SATELLITE_ORDER = ["esri", "maptiler", "s2"]   # best first
 CTYPE = {"jpg": "image/jpeg", "png": "image/png"}
-ASSETS = Path(__file__).resolve().parent.parent / "assets"
+ASSETS = Path(__file__).resolve().parent / "assets"
 STATIC_TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript", ".mjs": "text/javascript",
                 ".css": "text/css", ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg",
                 ".svg": "image/svg+xml", ".wasm": "application/wasm", ".glb": "model/gltf-binary",

@@ -6,3 +6,6 @@ logs/
 *.bin
 *.tlog
 .DS_Store
+dist/
+build/
+*.egg-info/

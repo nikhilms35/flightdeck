@@ -17,8 +17,11 @@ def _export_qwebchannel_js():
     data = bytes(f.readAll())
     f.close()
     dst = ASSETS / "qwebchannel.js"
-    if not dst.exists() or dst.read_bytes() != data:
-        dst.write_bytes(data)
+    try:
+        if not dst.exists() or dst.read_bytes() != data:
+            dst.write_bytes(data)
+    except OSError:
+        pass  # read-only install (e.g. system site-packages); bundled copy is used
 
 
 _export_qwebchannel_js()

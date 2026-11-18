@@ -20,12 +20,23 @@ Connects over USB serial using MAVLink 2.
 
 Requires Python 3.10+.
 
+**From a release (recommended):** download the `.whl` file from the
+[latest release](https://github.com/nikhilms35/flightdeck/releases/latest), then:
+
+```bash
+python3 -m venv ~/.flightdeck-venv
+~/.flightdeck-venv/bin/pip install flightdeck_gcs-*.whl
+~/.flightdeck-venv/bin/flightdeck
+```
+
+**From source:**
+
 ```bash
 git clone https://github.com/nikhilms35/flightdeck.git
 cd flightdeck
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-./run.sh
+.venv/bin/pip install -e .
+.venv/bin/flightdeck        # or ./run.sh
 ```
 
 On Linux, add your user to the `dialout` group to access the serial port: `sudo usermod -aG dialout $USER`, then log out and back in.

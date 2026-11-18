@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PySide6.QtGui import QFont, QFontDatabase
 
-ASSETS = Path(__file__).resolve().parent.parent / "assets"
+ASSETS = Path(__file__).resolve().parent / "assets"
 
 T = dict(
     bg="#0B0F14",
