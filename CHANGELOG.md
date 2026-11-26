@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 – 2026-11-26
 - Claude tab: ask Claude (via a local Claude Code install) about the live vehicle, parameters and logs; read-only.
 - Flight modes: INAV-style range sliders with a live switch marker.
 - Ports page for serial port and receiver setup.
