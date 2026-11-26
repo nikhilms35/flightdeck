@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 CACHE = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "flightdeck" / "tiles"
-UA = "FlightDeck/0.3 (ArduPilot ground station)"
+UA = "FlightDeck/0.4 (ArduPilot ground station)"
 
 PROVIDERS = {
     # name: (url template, extension, max native zoom, bulk download allowed)

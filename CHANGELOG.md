@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 – 2026-11-26
 - Works with ArduPlane, ArduRover, ArduSub and PX4 as well as ArduCopter. The firmware is detected from the vehicle,
   and can be overridden from the new firmware pill in the top bar.
 - Mode lists, the Return/Land buttons, the mode-switch page and parameter descriptions follow the firmware.
