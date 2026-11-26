@@ -5,8 +5,9 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
                                QListWidget, QMessageBox, QProgressBar, QScrollArea, QSpinBox, QStackedWidget,
                                QVBoxLayout, QWidget)
 
-from ..link import ACCEL_POSITIONS, COPTER_MODES, COPTER_MODE_IDS
-from ..widgets import Card, ChannelBar, ModeRangeSlider, QuadXDiagram, button, label, set_kind
+from ..link import ACCEL_POSITIONS
+from .params import load_metadata
+from ..widgets import Card, ChannelBar, ModeRangeSlider, MotorDiagram, button, label, set_kind
 
 
 def page(title, intro):
@@ -53,17 +54,16 @@ class SetupPage(QWidget):
         nv.addWidget(self.nav)
         root.addWidget(navw)
 
+        self.fw_note = label("", "Faint", True)
+        self.fw_note.setTextFormat(Qt.RichText)
+        nv.addWidget(self.fw_note)
+
         self.stack = QStackedWidget()
         root.addWidget(self.stack, 1)
-
-        for name, builder in [("Frame", self._frame), ("Accelerometer", self._accel), ("Compass", self._compass),
-                              ("Radio", self._radio), ("Flight modes", self._modes), ("Motor test", self._motors),
-                              ("Motor direction", self._direction),
-                              ("Battery & failsafe", self._failsafe), ("Geofence", self._fence)]:
-            self.nav.addItem(name)
-            self.stack.addWidget(builder())
         self.nav.currentRowChanged.connect(self.stack.setCurrentIndex)
-        self.nav.setCurrentRow(0)
+        self.pages = {}
+        self._build(link.firmware)
+        link.firmware_changed.connect(self._build)
 
         link.accelcal_pos.connect(self._accel_pos)
         link.magcal_progress.connect(self._mag_progress)
@@ -72,6 +72,43 @@ class SetupPage(QWidget):
         link.params_loaded.connect(self.reload_params)
         link.job_status.connect(self._job_status)
         self._reboot_after_write = False
+
+    BUILDERS = ["Frame", "Accelerometer", "Compass", "Radio", "Flight modes", "Motor test", "Motor direction",
+                "Battery & failsafe", "Geofence"]
+
+    def _build(self, fw):
+        """(Re)create the sub-pages that apply to this firmware."""
+        self.fw = fw
+        self.meta = load_metadata(fw)
+        current = self.nav.currentItem().text() if self.nav.currentItem() else None
+        builders = {"Frame": self._frame, "Accelerometer": self._accel, "Compass": self._compass,
+                    "Radio": self._radio, "Flight modes": self._modes, "Motor test": self._motors,
+                    "Motor direction": self._direction, "Battery & failsafe": self._failsafe,
+                    "Geofence": self._fence}
+        self.nav.blockSignals(True)
+        self.nav.clear()
+        while self.stack.count():
+            old = self.stack.widget(0)
+            self.stack.removeWidget(old)
+            old.deleteLater()
+        self.pages = {}
+        self._acc_pos = None
+        self._rc_cal = None
+        for name in self.BUILDERS:
+            if name in fw.setup_pages:
+                self.nav.addItem(name)
+                self.pages[name] = builders[name]()
+                self.stack.addWidget(self.pages[name])
+        self.nav.blockSignals(False)
+        names = list(self.pages)
+        self.nav.setCurrentRow(names.index(current) if current in names else 0)
+        self.fw_note.setText(f"<b>{fw.name}</b><br>{fw.notes}" if fw.notes else f"<b>{fw.name}</b>")
+        if self.link.params:
+            self.reload_params()
+
+    def _current(self):
+        it = self.nav.currentItem()
+        return it.text() if it else None
 
     def _job_status(self, job, msg):
         if job != "setup":
@@ -82,7 +119,7 @@ class SetupPage(QWidget):
                 self._reboot_after_write = False
                 self.link.reboot()
                 self.status(msg + " · rebooting")
-            if self.stack.currentIndex() == 3:
+            if self._current() == "Radio":
                 self.rc_cal_lbl.setText(msg)
 
     # ======================= helpers =======================
@@ -97,16 +134,21 @@ class SetupPage(QWidget):
 
     # ======================= frame =======================
     def _frame(self):
-        w, v = page("Frame", "Your 5\" deadcat uses the standard Quad X layout — ArduCopter has no separate deadcat type.")
+        w, v = page("Frame", "Tell ArduCopter how many motors your multirotor has and how they are arranged. "
+                             "Most quads, including deadcat and stretched-X frames, use Quad + X.")
+        row = QHBoxLayout()
+        row.setSpacing(14)
         c = Card("Frame type")
         f = QFormLayout()
         f.setSpacing(10)
         self.frame_class = QComboBox()
-        for k, n in [(1, "Quad"), (2, "Hexa"), (3, "Octa"), (7, "Tri"), (4, "OctaQuad"), (5, "Y6")]:
+        for k, n in [(1, "Quad"), (2, "Hexa"), (3, "Octa"), (4, "OctaQuad (X8)"), (5, "Y6"), (7, "Tri"),
+                     (12, "Dodeca-hexa"), (14, "Deca")]:
             self.frame_class.addItem(n, k)
         self.frame_type = QComboBox()
-        for k, n in [(1, "X  (use for deadcat)"), (0, "Plus"), (2, "V"), (3, "H"), (12, "BetaFlight X  (ESC wired in Betaflight order)"),
-                     (18, "BetaFlight X reversed")]:
+        for k, n in [(1, "X"), (0, "Plus (+)"), (2, "V"), (3, "H"), (12, "X, Betaflight motor order"),
+                     (18, "X, Betaflight order reversed"), (13, "X, DJI motor order"), (14, "X, clockwise order"),
+                     (10, "Y6B"), (11, "Y6F")]:
             self.frame_type.addItem(n, k)
         f.addRow("Class", self.frame_class)
         f.addRow("Layout", self.frame_type)
@@ -115,11 +157,31 @@ class SetupPage(QWidget):
         r.addStretch()
         r.addWidget(button("Write & reboot", "primary", self._write_frame))
         c.add(r)
-        v.addWidget(c)
+        c.lay.addStretch()
+        row.addWidget(c, 1)
+        pc = Card("Preview")
+        self.frame_preview = MotorDiagram()
+        pc.add(self.frame_preview, 1)
+        self.frame_preview_lbl = label("", "Faint", True)
+        pc.add(self.frame_preview_lbl)
+        row.addWidget(pc, 1)
+        v.addLayout(row)
+        self.frame_class.currentIndexChanged.connect(self._frame_preview)
+        self.frame_type.currentIndexChanged.connect(self._frame_preview)
+        self._frame_preview()
         v.addWidget(callout("After changing the frame the flight controller must reboot. "
                             "Then run <b>Motor test</b> to confirm order and direction."))
         v.addStretch()
         return w
+
+    def _frame_preview(self, *_):
+        fc, ft = self.frame_class.currentData(), self.frame_type.currentData()
+        ok = MotorDiagram.supported(fc, ft)
+        self.frame_preview.setVisible(ok)
+        self.frame_preview.set_frame(fc, ft)
+        self.frame_preview_lbl.setText(MotorDiagram.NAMES[(fc, ft)] if ok else
+                                       "No preview for this combination. Check the motor order diagram in the "
+                                       "ArduPilot docs, and make sure the layout exists for this class.")
 
     def _write_frame(self):
         if not self._need():
@@ -130,11 +192,11 @@ class SetupPage(QWidget):
 
     # ======================= accelerometer =======================
     def _accel(self):
-        w, v = page("Accelerometer", "Place the drone in six positions when asked. Hold it still in each one.")
+        w, v = page("Accelerometer", f"Place the {self.fw.vehicle} in six positions when asked. Hold it still in each one.")
         c = Card("6-position calibration")
         self.acc_prompt = label("Not started", "BigPrompt")
         c.add(self.acc_prompt)
-        self.acc_detail = label("Click Start, then place the drone LEVEL on a flat surface.", "Muted", True)
+        self.acc_detail = label(f"Click Start, then place the {self.fw.vehicle} LEVEL on a flat surface.", "Muted", True)
         c.add(self.acc_detail)
         r = QHBoxLayout()
         self.acc_start = button("Start calibration", "primary", self._accel_start)
@@ -146,7 +208,7 @@ class SetupPage(QWidget):
         c.add(r)
         v.addWidget(c)
         lc = Card("Level trim")
-        lc.add(label("If the drone drifts in Stabilize, put it on a level surface and run a quick level calibration.",
+        lc.add(label("If it drifts in a self-levelling mode, put it on a level surface and run a quick level calibration.",
                      "Muted", True))
         r2 = QHBoxLayout()
         r2.addWidget(button("Calibrate level", None, lambda: self._need() and self.link.level_cal()))
@@ -165,19 +227,21 @@ class SetupPage(QWidget):
         self.acc_start.setEnabled(False)
 
     def _accel_pos(self, pos):
+        if "Accelerometer" not in self.pages:
+            return
         name = ACCEL_POSITIONS.get(pos, f"Position {pos}")
         if pos in (16777215, 16777216):
             ok = pos == 16777215
             self.acc_prompt.setText("Calibration successful ✓" if ok else "Calibration failed ✗")
             self.acc_detail.setText("Reboot the flight controller to apply." if ok
-                                    else "Try again — keep the drone completely still in each position.")
+                                    else f"Try again — keep the {self.fw.vehicle} completely still in each position.")
             self.acc_next.setEnabled(False)
             self.acc_start.setEnabled(True)
             self._acc_pos = None
             return
         self._acc_pos = pos
         self.acc_prompt.setText(f"{pos}/6 · {name}")
-        self.acc_detail.setText("Place the drone like this, hold still, then click “Done — next position”.")
+        self.acc_detail.setText(f"Place the {self.fw.vehicle} like this, hold still, then click “Done — next position”.")
         self.acc_next.setEnabled(True)
 
     def _accel_next(self):
@@ -192,7 +256,7 @@ class SetupPage(QWidget):
         self.compass_info = callout("Connect to see detected compasses.")
         v.addWidget(self.compass_info)
         c = Card("Onboard calibration")
-        c.add(label("Click Start, then pick up the drone and slowly rotate it so every side points at the "
+        c.add(label(f"Click Start, then pick up the {self.fw.vehicle} and slowly rotate it so every side points at the "
                     "ground once (roll it over, nose down, nose up, both sides). Keep going until all bars reach 100%.",
                     "Muted", True))
         self.mag_bars = []
@@ -229,17 +293,21 @@ class SetupPage(QWidget):
             return
         for h, pb in self.mag_bars:
             pb.setValue(0)
-        self.mag_result.setText("Rotate the drone now…")
+        self.mag_result.setText(f"Rotate the {self.fw.vehicle} now…")
         self.mag_reboot.hide()
         self.link.mag_cal_start()
 
     def _mag_progress(self, cid, pct):
+        if "Compass" not in self.pages:
+            return
         if cid < 3:
             h, pb = self.mag_bars[cid]
             h.show()
             pb.setValue(pct)
 
     def _mag_report(self, cid, status, fitness):
+        if "Compass" not in self.pages:
+            return
         ok = status == 4
         names = {4: "success", 5: "failed", 6: "bad orientation", 7: "bad radius"}
         col = "#2FBF71" if ok else "#F05A52"
@@ -309,17 +377,34 @@ class SetupPage(QWidget):
         self.link.write_params(ch, job="setup")
 
     # ======================= flight modes =======================
-    # ArduPilot's fixed FLTMODE1-6 PWM bands (slot 1 also covers anything below, slot 6 anything above)
+    # ArduPilot's fixed FLTMODE1-6 / MODE1-6 PWM bands (slot 1 also covers anything below, slot 6 anything above)
     MODE_RANGES = [(900, 1230), (1231, 1360), (1361, 1490), (1491, 1620), (1621, 1749), (1750, 2100)]
+    # PX4 splits the calibrated stick range into six equal slots
+    PX4_RANGES = [(900, 1166), (1167, 1333), (1334, 1500), (1501, 1666), (1667, 1833), (1834, 2100)]
+
+    def _mode_options(self):
+        """[(value written to the slot parameter, label)] for this firmware's mode switch."""
+        opts = self.fw.mode_switch[2]
+        if opts:
+            return list(opts.items())
+        order = self.fw.mode_names()
+        num = {v: k for k, v in self.fw.modes.items()}
+        return [(num[n], n) for n in order]
 
     def _modes(self):
+        fw = self.fw
+        px4 = fw.family == "px4"
+        self.fm_ranges = self.PX4_RANGES if px4 else self.MODE_RANGES
         w, v = page("Flight modes", "Pick a switch channel and assign a mode to each position. "
-                                    "A 3-position switch hits slots 1, 4 and 6.")
+                                    "A 3-position switch hits slots 1, 4 and 6."
+                    + (" On PX4 the slots are approximate: they depend on your radio calibration." if px4 else ""))
         c = Card("Mode switch")
         top = QHBoxLayout()
         top.addWidget(label("Switch channel"))
         self.fm_ch = QComboBox()
-        for i in range(5, 13):
+        if px4:
+            self.fm_ch.addItem("Not used", 0)
+        for i in range(5, 17):
             self.fm_ch.addItem(f"Channel {i}", i)
         top.addWidget(self.fm_ch)
         top.addStretch()
@@ -331,13 +416,12 @@ class SetupPage(QWidget):
         g.setHorizontalSpacing(12)
         g.setVerticalSpacing(8)
         self.fm_boxes, self.fm_marks, self.fm_sliders = [], [], []
-        modes = sorted(COPTER_MODES.values(), key=lambda n: (n not in
-                       ("STABILIZE", "ALT_HOLD", "LOITER", "POSHOLD", "RTL", "LAND", "ACRO"), n))
+        options = self._mode_options()
         for i in range(6):
             mark = label("●")
             mark.setStyleSheet("color:#2A2A2F;")
             g.addWidget(mark, i, 0)
-            lo, hi = self.MODE_RANGES[i]
+            lo, hi = self.fm_ranges[i]
             name = QVBoxLayout()
             name.setSpacing(0)
             name.addWidget(label(f"Mode {i + 1}"))
@@ -345,7 +429,8 @@ class SetupPage(QWidget):
                                  f"{'' if i == 0 else ('+' if i == 5 else f'–{hi}')} µs", "Faint"))
             g.addLayout(name, i, 1)
             cb = QComboBox()
-            cb.addItems(modes)
+            for val, text in options:
+                cb.addItem(text, val)
             cb.setMinimumWidth(150)
             g.addWidget(cb, i, 2)
             sl = ModeRangeSlider(lo, hi)
@@ -360,32 +445,46 @@ class SetupPage(QWidget):
         r.addWidget(button("Write modes", "primary", self._write_modes))
         c.add(r)
         v.addWidget(c)
-        v.addWidget(callout("Suggested for a first flight: <b>STABILIZE</b> / <b>ALT_HOLD</b> / <b>LOITER</b> on a "
-                            "3-position switch, and put <b>RTL</b> within easy reach."))
+        if fw.suggested:
+            v.addWidget(callout(fw.suggested))
         v.addStretch()
         return w
 
     def _write_modes(self):
         if not self._need():
             return
-        ch = {"FLTMODE_CH": self.fm_ch.currentData()}
+        ch_param, slot_fmt, _ = self.fw.mode_switch
+        ch = {ch_param: self.fm_ch.currentData()}
         for i, cb in enumerate(self.fm_boxes):
-            ch[f"FLTMODE{i + 1}"] = COPTER_MODE_IDS[cb.currentText()]
+            ch[slot_fmt.format(i + 1)] = cb.currentData()
+        missing = [k for k in ch if self.link.params and k not in self.link.params]
+        if missing:
+            QMessageBox.warning(self, "Not available", f"This vehicle doesn't have {', '.join(missing)}. "
+                                                       "Check the firmware selection in the top bar.")
+            return
         self.link.write_params(ch, job="setup")
 
     # ======================= motor test =======================
+    MOTOR_COUNT = {1: 4, 2: 6, 3: 8, 4: 8, 5: 6, 7: 3, 12: 12, 14: 10}
+
+    def _motor_letters(self, frame_class, frame_type):
+        if MotorDiagram.supported(frame_class, frame_type):
+            return [m[0] for m in MotorDiagram.layout(frame_class, frame_type)]
+        n = self.MOTOR_COUNT.get(int(frame_class), 4)
+        return [chr(ord("A") + i) for i in range(n)]
+
     def _motors(self):
         w, v = page("Motor test", "Spins one motor at a time so you can check order and direction.")
         v.addWidget(callout("<b>Remove all propellers before testing.</b> Plug in the flight battery — motors do not "
                             "spin on USB power alone.", "danger"))
         row = QHBoxLayout()
         row.setSpacing(14)
-        dc = Card("Expected (Quad X / deadcat)")
-        self.quad = QuadXDiagram()
+        dc = Card("Expected layout")
+        self.quad = MotorDiagram()
         dc.add(self.quad, 1)
-        dc.add(label("Green = counter-clockwise, amber = clockwise (props-in, viewed from above). "
-                     "If a motor spins the wrong way, fix it on the <b>Motor direction</b> page — no need to "
-                     "swap wires or open an ESC configurator.", "Faint", True))
+        self.mt_frame_lbl = label("", "Faint", True)
+        self.mt_frame_lbl.setTextFormat(Qt.RichText)
+        dc.add(self.mt_frame_lbl)
         row.addWidget(dc, 1)
         cc = Card("Test")
         self.props_off = QCheckBox("I have removed all propellers")
@@ -403,25 +502,44 @@ class SetupPage(QWidget):
         f.addRow("Throttle", self.mt_pct)
         f.addRow("Duration", self.mt_sec)
         cc.add(f)
-        g = QGridLayout()
-        self.mt_btns = []
-        for i, letter in enumerate("ABCD"):
-            b = button(f"Motor {letter}", None, lambda _=False, i=i, L=letter: self._motor(i + 1, L))
-            g.addWidget(b, i // 2, i % 2)
-            self.mt_btns.append(b)
-        cc.add(g)
-        allb = button("Test all in sequence", "primary", lambda: self._motor(1, "A", count=4))
-        self.mt_btns.append(allb)
-        cc.add(allb)
+        self.mt_grid_w = QWidget()
+        self.mt_grid = QGridLayout(self.mt_grid_w)
+        self.mt_grid.setContentsMargins(0, 0, 0, 0)
+        cc.add(self.mt_grid_w)
+        self.mt_all = button("Test all in sequence", "primary", lambda: self._motor(1, None, count=len(self.mt_btns)))
+        cc.add(self.mt_all)
         cc.lay.addStretch()
         row.addWidget(cc, 1)
         v.addLayout(row)
         v.addStretch()
-        self._props_toggled(False)
+        self.mt_btns = []
+        self._mt_set_layout(1, 1)
         return w
 
-    def _props_toggled(self, on):
+    def _mt_set_layout(self, frame_class, frame_type):
         for b in self.mt_btns:
+            self.mt_grid.removeWidget(b)
+            b.deleteLater()
+        self.mt_btns = []
+        letters = self._motor_letters(frame_class, frame_type)
+        for i, L in enumerate(letters):
+            b = button(f"Motor {L}", None, lambda _=False, i=i, L=L: self._motor(i + 1, L))
+            self.mt_grid.addWidget(b, i // 2, i % 2)
+            self.mt_btns.append(b)
+        self.quad.set_frame(frame_class, frame_type)
+        if MotorDiagram.supported(frame_class, frame_type):
+            self.mt_frame_lbl.setText(f"{MotorDiagram.NAMES[(int(frame_class), int(frame_type))]} · green = "
+                                      "counter-clockwise, amber = clockwise, viewed from above. Letters are the "
+                                      "test order (clockwise from the front); M-numbers are the outputs. If a motor "
+                                      "spins the wrong way, fix it on <b>Motor direction</b>.")
+        else:
+            self.mt_frame_lbl.setText(f"This frame (class {frame_class}, type {frame_type}) has no diagram here. "
+                                      "The test still runs motors A, B, C… in ArduPilot's test order: compare "
+                                      "with the motor order diagram for your frame in the ArduPilot docs.")
+        self._props_toggled(self.props_off.isChecked())
+
+    def _props_toggled(self, on):
+        for b in self.mt_btns + [self.mt_all]:
             b.setEnabled(on)
 
     def _motor(self, n, letter, count=0):
@@ -438,8 +556,6 @@ class SetupPage(QWidget):
     # ======================= motor direction =======================
     # ArduPilot sends the DShot "reverse" command to every output in SERVO_BLH_RVMASK while disarmed.
     # It only does so when SERVO_DSHOT_ESC names a BLHeli-family ESC (BLHeli_S / Bluejay = 2).
-    POS_NAME = {(1, -1): "front-right", (1, 1): "rear-right", (-1, 1): "rear-left", (-1, -1): "front-left"}
-
     def _direction(self):
         w, v = page("Motor direction", "Spin each motor, compare it with the diagram, and tick “Reverse” for any "
                                        "that turn the wrong way. Works with DShot — no wire swapping.")
@@ -447,7 +563,7 @@ class SetupPage(QWidget):
         row = QHBoxLayout()
         row.setSpacing(14)
         dc = Card("Correct direction (viewed from above)")
-        self.dir_quad = QuadXDiagram()
+        self.dir_quad = MotorDiagram()
         dc.add(self.dir_quad, 1)
         dc.add(label("Green = counter-clockwise, amber = clockwise.", "Faint", True))
         row.addWidget(dc, 1)
@@ -456,30 +572,22 @@ class SetupPage(QWidget):
         self.dir_props = QCheckBox("I have removed all propellers")
         self.dir_props.toggled.connect(self._dir_props_toggled)
         cc.add(self.dir_props)
-        g = QGridLayout()
-        g.setHorizontalSpacing(12)
-        g.setVerticalSpacing(10)
-        for col, h in enumerate(["Motor", "Should spin", "", "Fix"]):
-            g.addWidget(label(h, "Faint"), 0, col)
-        self.dir_spin_btns, self.dir_rows = [], {}
-        for r, letter in enumerate("ABCD", start=1):
-            name_lbl, spin_lbl = label("", None, True), label("", None)
-            g.addWidget(name_lbl, r, 0)
-            g.addWidget(spin_lbl, r, 1)
-            b = button("Spin", None, lambda _=False, i=r, L=letter: self._dir_spin(i, L))
-            self.dir_spin_btns.append(b)
-            g.addWidget(b, r, 2)
-            cb = QCheckBox("Reverse")
-            g.addWidget(cb, r, 3)
-            self.dir_rows[letter] = (name_lbl, spin_lbl, cb)
-        cc.add(g)
-        self._dir_set_layout(1)
+        self.dir_grid_w = QWidget()
+        self.dir_grid = QGridLayout(self.dir_grid_w)
+        self.dir_grid.setContentsMargins(0, 0, 0, 0)
+        self.dir_grid.setHorizontalSpacing(12)
+        self.dir_grid.setVerticalSpacing(10)
+        cc.add(self.dir_grid_w)
+        self.dir_unsupported = callout("", "warn")
+        self.dir_unsupported.hide()
+        cc.add(self.dir_unsupported)
         self.dir_state = label("", "Muted", True)
         self.dir_state.setTextFormat(Qt.RichText)
         cc.add(self.dir_state)
         r2 = QHBoxLayout()
         r2.addStretch()
-        r2.addWidget(button("Write && reboot", "primary", self._dir_write))
+        self.dir_write_btn = button("Write && reboot", "primary", self._dir_write)
+        r2.addWidget(self.dir_write_btn)
         cc.add(r2)
         cc.lay.addStretch()
         row.addWidget(cc, 1)
@@ -489,17 +597,45 @@ class SetupPage(QWidget):
                             "<b>After un-ticking a motor, unplug and replug the battery</b> — the ESC keeps the "
                             "reversed direction until it loses power."))
         v.addStretch()
-        self._dir_props_toggled(False)
+        self.dir_rows, self.dir_spin_btns, self.dir_layout = {}, [], {}
+        self._dir_set_layout(1, 1)
         return w
 
-    def _dir_set_layout(self, frame_type):
-        """Motor letters are fixed by position; which output drives each depends on FRAME_TYPE."""
-        self.dir_layout = {L: (num, ccw) for L, num, *_, ccw in QuadXDiagram.layout(frame_type)}
-        self.dir_quad.set_frame(frame_type)
-        for L, num, x, y, ccw in QuadXDiagram.layout(frame_type):
-            name_lbl, spin_lbl, _ = self.dir_rows[L]
-            name_lbl.setText(f"<b>{L}</b> · {self.POS_NAME[(x, y)]} · output {num}")
-            spin_lbl.setText("↺ counter-clockwise" if ccw else "↻ clockwise")
+    def _dir_set_layout(self, frame_class, frame_type):
+        """Motor letters are fixed by position; which output drives each depends on the frame."""
+        while self.dir_grid.count():
+            it = self.dir_grid.takeAt(0)
+            if it.widget():
+                it.widget().deleteLater()
+        self.dir_rows, self.dir_spin_btns, self.dir_layout = {}, [], {}
+        ok = MotorDiagram.supported(frame_class, frame_type)
+        self.dir_quad.set_frame(frame_class, frame_type)
+        self.dir_grid_w.setVisible(ok)
+        self.dir_write_btn.setEnabled(ok)
+        self.dir_unsupported.setVisible(not ok)
+        if not ok:
+            self.dir_unsupported.setText(f"Frame class {frame_class}, type {frame_type} isn't drawn here, so FlightDeck "
+                                         "can't tell which output is which motor. Set <code>SERVO_BLH_RVMASK</code> "
+                                         "on the Params page using the ArduPilot motor order diagram.")
+            return
+        for col, h in enumerate(["Motor", "Should spin", "", "Fix"]):
+            self.dir_grid.addWidget(label(h, "Faint"), 0, col)
+        for r, (L, num, angle, ccw) in enumerate(MotorDiagram.layout(frame_class, frame_type), start=1):
+            self.dir_layout[L] = (num, ccw)
+            name_lbl = label(f"<b>{L}</b> · {MotorDiagram.position_name(angle)} · output {num}", None, True)
+            name_lbl.setTextFormat(Qt.RichText)
+            self.dir_grid.addWidget(name_lbl, r, 0)
+            self.dir_grid.addWidget(label("↺ counter-clockwise" if ccw else "↻ clockwise"), r, 1)
+            b = button("Spin", None, lambda _=False, i=r, L=L: self._dir_spin(i, L))
+            self.dir_spin_btns.append(b)
+            self.dir_grid.addWidget(b, r, 2)
+            cb = QCheckBox("Reverse")
+            self.dir_grid.addWidget(cb, r, 3)
+            self.dir_rows[L] = cb
+        rv = int(self._p("SERVO_BLH_RVMASK", 0) or 0)
+        for L, cb in self.dir_rows.items():
+            cb.setChecked(bool(rv & (1 << (self.dir_layout[L][0] - 1))))
+        self._dir_props_toggled(self.dir_props.isChecked())
 
     def _dir_props_toggled(self, on):
         for b in self.dir_spin_btns:
@@ -517,24 +653,25 @@ class SetupPage(QWidget):
         self.status(f"Spinning motor {letter} at 8% for 2 s — compare with the diagram")
 
     def _dir_write(self):
-        if not self._need():
+        if not self._need() or not self.dir_layout:
             return
         if self.link.state.armed:
             QMessageBox.warning(self, "Armed", "Disarm first.")
             return
+        if int(self._p("MOT_PWM_TYPE", 0) or 0) < 4:
+            QMessageBox.warning(self, "Not DShot", "Motor direction can only be set this way when the motors use "
+                                                   "DShot (MOT_PWM_TYPE 4–7). Set DShot first.")
+            return
         old = int(self._p("SERVO_BLH_RVMASK", 0) or 0)
-        mask = old & ~0xF
-        for L, (_, _, cb) in self.dir_rows.items():
+        ours = sum(1 << (num - 1) for num, _ in self.dir_layout.values())
+        mask = old & ~ours
+        for L, cb in self.dir_rows.items():
             if cb.isChecked():
                 mask |= 1 << (self.dir_layout[L][0] - 1)
         changes = {"SERVO_BLH_RVMASK": mask}
         if int(self._p("SERVO_DSHOT_ESC", 0) or 0) == 0:
             changes["SERVO_DSHOT_ESC"] = 2   # BLHeli_S / Bluejay — needed for the reverse command to be sent
-        if int(self._p("MOT_PWM_TYPE", 0) or 0) < 4:
-            QMessageBox.warning(self, "Not DShot", "Motor direction can only be set this way when the motors use "
-                                                   "DShot (MOT_PWM_TYPE 4–7). Set DShot first.")
-            return
-        un_reversed = old & ~mask & 0xF
+        un_reversed = old & ~mask & ours
         self._reboot_after_write = True
         self.link.write_params(changes, job="setup")
         if un_reversed:
@@ -549,21 +686,33 @@ class SetupPage(QWidget):
         ("BATT_CRT_VOLT", "Critical voltage", "V", 0, 60, 2),
         ("BATT_ARM_VOLT", "Minimum voltage to arm", "V", 0, 60, 2),
     ]
+    # (param, label, fallback options when there are no parameter descriptions). Rows the vehicle doesn't have
+    # are hidden once parameters are loaded, so one list covers Copter, Plane, Rover and Sub.
     FS_COMBOS = [
         ("BATT_FS_LOW_ACT", "When low", {0: "Warn only", 1: "Land", 2: "Return home (RTL)", 3: "SmartRTL→RTL→Land"}),
-        ("BATT_FS_CRT_ACT", "When critical", {0: "Warn only", 1: "Land", 2: "Return home (RTL)", 3: "SmartRTL→RTL→Land"}),
+        ("BATT_FS_CRT_ACT", "When critical", {0: "Warn only", 1: "Land", 2: "Return home (RTL)",
+                                              3: "SmartRTL→RTL→Land"}),
         ("FS_THR_ENABLE", "Radio signal lost", {0: "Disabled", 1: "Return home (RTL)", 2: "Continue mission, else RTL",
                                                 3: "Land", 4: "SmartRTL→RTL", 5: "SmartRTL→Land"}),
+        ("THR_FAILSAFE", "Radio signal lost", {0: "Disabled", 1: "Enabled", 2: "Enabled, no failsafe action"}),
+        ("FS_SHORT_ACTN", "Short failsafe action", {}),
+        ("FS_LONG_ACTN", "Long failsafe action", {}),
+        ("FS_ACTION", "Failsafe action", {}),
     ]
 
+    def _options(self, name, fallback):
+        vals = self.meta.get(name, {}).get("values") or fallback
+        return [(int(k) if float(k).is_integer() else k, t) for k, t in vals.items()]
+
     def _failsafe(self):
-        w, v = page("Battery & failsafe", "What the drone does when the battery runs low or the radio link drops.")
+        w, v = page("Battery & failsafe", f"What the {self.fw.vehicle} does when the battery runs low or the radio "
+                                          "link drops.")
         self.batt_live = callout("Connect to see live battery readings.")
         v.addWidget(self.batt_live)
         c = Card("Battery")
         f = QFormLayout()
         f.setSpacing(10)
-        self.fs_widgets = {}
+        self.fs_widgets, self.fs_rows = {}, {}
         for name, lab, unit, lo, hi, dec in self.FS_FIELDS:
             sp = QDoubleSpinBox()
             sp.setRange(lo, hi)
@@ -572,21 +721,26 @@ class SetupPage(QWidget):
             sp.setSingleStep(0.1 if dec else 100)
             f.addRow(lab, sp)
             self.fs_widgets[name] = sp
+            self.fs_rows[name] = (f, sp)
         c.add(f)
         v.addWidget(c)
         c2 = Card("Failsafe actions")
         f2 = QFormLayout()
         f2.setSpacing(10)
-        for name, lab, opts in self.FS_COMBOS:
+        for name, lab, fallback in self.FS_COMBOS:
+            opts = self._options(name, fallback)
+            if not opts:
+                continue
             cb = QComboBox()
-            for k, n in opts.items():
+            for k, n in opts:
                 cb.addItem(n, k)
             f2.addRow(lab, cb)
             self.fs_widgets[name] = cb
+            self.fs_rows[name] = (f2, cb)
         c2.add(f2)
         v.addWidget(c2)
         v.addWidget(callout("For a 4S LiPo, sensible values are low <b>14.0 V</b> (3.5 V/cell) and critical "
-                            "<b>13.2 V</b> (3.3 V/cell). Return home needs a GPS lock; otherwise the drone lands."))
+                            "<b>13.2 V</b> (3.3 V/cell). Returning home needs a GPS lock."))
         r = QHBoxLayout()
         r.addStretch()
         r.addWidget(button("Write", "primary", self._write_fs))
@@ -607,79 +761,91 @@ class SetupPage(QWidget):
     # ======================= geofence =======================
     def _fence(self):
         from ..widgets import ParamForm
-        w, v = page("Geofence", "An invisible cylinder around home. If the drone flies out of it, the failsafe "
-                                "action brings it back. The circle is drawn in red on the Fly map.")
+        w, v = page("Geofence", f"An invisible boundary around home. If the {self.fw.vehicle} goes outside it, the "
+                                "breach action brings it back. The circle is drawn in red on the Fly map.")
         c = Card("Fence")
-        c.add(ParamForm(self.link, [
-            ("FENCE_ENABLE", "Fence", {0: "Off", 1: "On"}),
-            ("FENCE_TYPE", "Limits", {1: "Max altitude", 2: "Circle", 3: "Max altitude + circle",
-                                      7: "Altitude + circle + polygon", 11: "Max + min altitude + circle"}),
-            ("FENCE_RADIUS", "Circle radius (m)", 0, 10),
-            ("FENCE_ALT_MAX", "Max altitude (m)", 0, 5),
-            ("FENCE_MARGIN", "Margin (m)", 1, 0.5),
-            ("FENCE_ACTION", "When breached", {0: "Report only", 1: "RTL, else Land", 2: "Land",
-                                               3: "SmartRTL, else RTL, else Land", 4: "Brake, else Land",
-                                               5: "SmartRTL, else Land"}),
-        ]))
+        rows = [("FENCE_ENABLE", "Fence", dict(self._options("FENCE_ENABLE", {0: "Off", 1: "On"}))),
+                ("FENCE_TYPE", "Limits", dict(self._options("FENCE_TYPE", {
+                    1: "Max altitude", 2: "Circle", 3: "Max altitude + circle", 7: "Altitude + circle + polygon"}))),
+                ("FENCE_RADIUS", "Circle radius (m)", 0, 10),
+                ("FENCE_ALT_MAX", "Max altitude (m)", 0, 5),
+                ("FENCE_MARGIN", "Margin (m)", 1, 0.5),
+                ("FENCE_ACTION", "When breached", dict(self._options("FENCE_ACTION", {
+                    0: "Report only", 1: "RTL, else Land", 2: "Land"})))]
+        c.add(ParamForm(self.link, rows, self.meta))
         v.addWidget(c)
-        v.addWidget(callout("For a 5\" quad on line-of-sight, a sensible start is a <b>150 m</b> circle, "
-                            "<b>60 m</b> max altitude and <b>RTL</b> on breach. The fence needs a GPS fix "
-                            "before arming when it's enabled."))
+        v.addWidget(callout("A sensible start for line-of-sight flying is a <b>150 m</b> circle, <b>60 m</b> max "
+                            "altitude and <b>RTL</b> on breach. With the fence on, arming needs a GPS fix. "
+                            "FENCE_TYPE is a bitmask: if the list doesn't show your combination, set it on the "
+                            "Params page."))
         v.addStretch()
         return w
 
     # ======================= sync =======================
     def reload_params(self):
         P = self.link.params
-        if "FRAME_CLASS" in P:
-            i = self.frame_class.findData(int(P["FRAME_CLASS"]))
-            if i >= 0:
-                self.frame_class.setCurrentIndex(i)
-        if "FRAME_TYPE" in P:
-            i = self.frame_type.findData(int(P["FRAME_TYPE"]))
-            if i >= 0:
-                self.frame_type.setCurrentIndex(i)
-        if "FLTMODE_CH" in P:
-            self.fm_ch.setCurrentIndex(max(0, self.fm_ch.findData(int(P["FLTMODE_CH"]))))
-        for i, cb in enumerate(self.fm_boxes):
-            n = P.get(f"FLTMODE{i + 1}")
-            if n is not None:
-                cb.setCurrentText(COPTER_MODES.get(int(n), cb.currentText()))
-        for name, wdg in self.fs_widgets.items():
-            if name in P:
-                if isinstance(wdg, QComboBox):
-                    j = wdg.findData(int(P[name]))
+        pg = self.pages
+        if "Frame" in pg:
+            for box, name in ((self.frame_class, "FRAME_CLASS"), (self.frame_type, "FRAME_TYPE")):
+                if name in P:
+                    i = box.findData(int(P[name]))
+                    if i >= 0:
+                        box.setCurrentIndex(i)
+            self._frame_preview()
+        if "Flight modes" in pg and self.fw.mode_switch:
+            ch_param, slot_fmt, _ = self.fw.mode_switch
+            if ch_param in P:
+                i = self.fm_ch.findData(int(P[ch_param]))
+                if i >= 0:
+                    self.fm_ch.setCurrentIndex(i)
+            for i, cb in enumerate(self.fm_boxes):
+                n = P.get(slot_fmt.format(i + 1))
+                if n is not None:
+                    j = cb.findData(int(n))
                     if j >= 0:
-                        wdg.setCurrentIndex(j)
-                else:
-                    wdg.setValue(P[name])
-        comps = []
-        for i, sfx in enumerate(["", "2", "3"]):
-            dev = int(P.get(f"COMPASS_DEV_ID{sfx}", 0) or 0)
-            if dev:
-                use = int(P.get(f"COMPASS_USE{sfx}", 1))
-                ext = "external" if (i == 0 and int(P.get("COMPASS_EXTERNAL", 0))) or (dev >> 3 & 0x1F) else ""
-                comps.append(f"Compass {i + 1}: id {dev}{' · ' + ext if ext else ''} · "
-                             f"{'<b>in use</b>' if use else 'not used'}")
-        self.compass_info.setText("<br>".join(comps) if comps else "No compass detected.")
-        ft = int(P.get("FRAME_TYPE", 1) or 1)
-        self.quad.set_frame(ft)
-        self._dir_set_layout(ft)
-        rv = int(P.get("SERVO_BLH_RVMASK", 0) or 0)
-        for L, (_, _, cb) in self.dir_rows.items():
-            cb.setChecked(bool(rv & (1 << (self.dir_layout[L][0] - 1))))
-        esc = int(P.get("SERVO_DSHOT_ESC", 0) or 0)
-        pwm = int(P.get("MOT_PWM_TYPE", 0) or 0)
-        names = {4: "DShot150", 5: "DShot300", 6: "DShot600", 7: "DShot1200"}
-        rev = [L for L, (n, _) in self.dir_layout.items() if rv & (1 << (n - 1))]
-        if ft not in QuadXDiagram.LAYOUTS:
-            rev.append(f"(frame type {ft} not supported here — outputs may not match)")
-        self.dir_state.setText(
-            f"Protocol: <b>{names.get(pwm, 'not DShot')}</b> · ESC type: "
-            f"<b>{ {0: 'not set (will set to BLHeli_S/Bluejay)', 1: 'BLHeli32/AM32', 2: 'BLHeli_S/Bluejay', 3: 'BLHeli32/AM32 EDT', 4: 'BLHeli_S/Bluejay EDT'}.get(esc, str(esc))}</b>"
-            f" · Reversed now: <b>{', '.join(rev) if rev else 'none'}</b>")
+                        cb.setCurrentIndex(j)
+        if "Battery & failsafe" in pg:
+            for name, wdg in self.fs_widgets.items():
+                form, _ = self.fs_rows[name]
+                if P:
+                    form.setRowVisible(wdg, name in P)
+                if name in P:
+                    if isinstance(wdg, QComboBox):
+                        j = wdg.findData(int(P[name]))
+                        if j >= 0:
+                            wdg.setCurrentIndex(j)
+                    else:
+                        wdg.setValue(P[name])
+        if "Compass" in pg:
+            comps = []
+            for i, sfx in enumerate(["", "2", "3"]):
+                dev = int(P.get(f"COMPASS_DEV_ID{sfx}", 0) or 0)
+                if dev:
+                    use = int(P.get(f"COMPASS_USE{sfx}", 1))
+                    ext = "external" if (i == 0 and int(P.get("COMPASS_EXTERNAL", 0))) or (dev >> 3 & 0x1F) else ""
+                    comps.append(f"Compass {i + 1}: id {dev}{' · ' + ext if ext else ''} · "
+                                 f"{'<b>in use</b>' if use else 'not used'}")
+            self.compass_info.setText("<br>".join(comps) if comps else "No compass detected.")
+        if "Motor test" in pg or "Motor direction" in pg:
+            fc, ft = int(P.get("FRAME_CLASS", 1) or 1), int(P.get("FRAME_TYPE", 1) or 0)
+            if "Motor test" in pg:
+                self._mt_set_layout(fc, ft)
+            if "Motor direction" in pg:
+                self._dir_set_layout(fc, ft)
+                rv = int(P.get("SERVO_BLH_RVMASK", 0) or 0)
+                esc = int(P.get("SERVO_DSHOT_ESC", 0) or 0)
+                pwm = int(P.get("MOT_PWM_TYPE", 0) or 0)
+                names = {4: "DShot150", 5: "DShot300", 6: "DShot600", 7: "DShot1200"}
+                rev = [L for L, (n, _) in self.dir_layout.items() if rv & (1 << (n - 1))]
+                esc_names = {0: "not set (will set to BLHeli_S/Bluejay)", 1: "BLHeli32/AM32", 2: "BLHeli_S/Bluejay",
+                             3: "BLHeli32/AM32 EDT", 4: "BLHeli_S/Bluejay EDT"}
+                self.dir_state.setText(
+                    f"Protocol: <b>{names.get(pwm, 'not DShot')}</b> · ESC type: "
+                    f"<b>{esc_names.get(esc, str(esc))}</b> · Reversed now: <b>{', '.join(rev) if rev else 'none'}</b>")
 
     def _statustext(self, sev, text):
+        if "Accelerometer" not in self.pages:
+            return
         low = text.lower()
         if "calibration successful" in low or "calibration failed" in low or "place vehicle" in low:
             self.acc_detail.setText(text)
@@ -688,11 +854,13 @@ class SetupPage(QWidget):
         st = self.link.state
         if not st.connected:
             return
-        idx = self.stack.currentIndex()
-        if idx == 3:  # radio
+        cur = self._current()
+        if cur == "Radio":
             if st.rc_count == 0:
-                self.rc_warn.setText("<b>No receiver data.</b> Check the ELRS receiver LED is solid (bound), "
-                                     "RX TX → FC R2 and RX RX → FC T2, and that SERIAL2_PROTOCOL = 23.")
+                hint = ("Check the receiver is bound (solid LED) and wired to a flight controller UART"
+                        + (", and that UART's <code>SERIALn_PROTOCOL</code> is 23 (RCIN)." if self.fw.family == "ardupilot"
+                           else "."))
+                self.rc_warn.setText(f"<b>No receiver data.</b> {hint}")
                 self.rc_warn.show()
             else:
                 self.rc_warn.hide()
@@ -704,21 +872,21 @@ class SetupPage(QWidget):
                     b.set(val, lohi[0], lohi[1])
                 else:
                     b.set(val, int(self._p(f"RC{i + 1}_MIN", 0)) or None, int(self._p(f"RC{i + 1}_MAX", 0)) or None)
-        elif idx == 4:  # modes
+        elif cur == "Flight modes":
             ch = self.fm_ch.currentData()
-            pwm = st.rc[ch - 1] if st.rc_count >= ch else 0
+            pwm = st.rc[ch - 1] if ch and st.rc_count >= ch else 0
             slot = None
             if pwm:
-                bounds = [1230, 1360, 1490, 1620, 1749]
+                bounds = [hi for _, hi in self.fm_ranges[:5]]
                 slot = next((i for i, b in enumerate(bounds) if pwm <= b), 5)
-            self.fm_pwm.setText(f"Channel {ch}: {pwm} µs" if pwm else f"Channel {ch}: no signal")
-            if pwm:
                 self.fm_pwm.setText(f"Channel {ch}: {pwm} µs → <b>{self.fm_boxes[slot].currentText()}</b>")
+            else:
+                self.fm_pwm.setText(f"Channel {ch}: no signal" if ch else "Mode switch not used")
             for i, m in enumerate(self.fm_marks):
                 m.setStyleSheet("color:#2FBF71;" if i == slot else "color:#2A2A2F;")
             for sl in self.fm_sliders:
                 sl.set_value(pwm)
-        elif idx == 7:  # battery & failsafe
+        elif cur == "Battery & failsafe":
             cells = round(st.batt_v / 4.2) if st.batt_v > 5 else 0
             if cells:
                 self.batt_live.setText(f"Live: <b>{st.batt_v:.2f} V</b> ({cells}S, {st.batt_v / cells:.2f} V/cell) · "

@@ -13,10 +13,9 @@ from PySide6.QtCore import QObject, Signal
 os.environ.setdefault("MAVLINK20", "1")  # must be set before pymavlink loads its dialect
 from pymavlink import mavutil  # noqa: E402
 
-mavlink = mavutil.mavlink
+from . import firmware as fwmod  # noqa: E402
 
-COPTER_MODES = dict(mavutil.mode_mapping_acm)  # num -> name
-COPTER_MODE_IDS = {v: k for k, v in COPTER_MODES.items()}
+mavlink = mavutil.mavlink
 
 # commands sent by number so they work regardless of dialect enum availability
 CMD_ACCELCAL_VEHICLE_POS = 42429
@@ -135,6 +134,7 @@ class Link(QObject):
     log_list = Signal(list)                 # [dict(id, size, time_utc)]
     log_progress = Signal(int, int, int)    # id, bytes received, total
     log_saved = Signal(int, str)            # id, path ('' on failure)
+    firmware_changed = Signal(object)       # Firmware
 
     def __init__(self):
         super().__init__()
@@ -150,6 +150,36 @@ class Link(QObject):
         self._subs: list[tuple[set, queue.Queue]] = []
         self._subs_lock = threading.Lock()
         self.port = None
+        self.detected = None            # Firmware seen in the heartbeat (None until connected / unknown)
+        self.detected_text = ""         # human description of what the heartbeat said
+        self.override = None            # Firmware chosen by the user, or None for automatic
+        self._fw = fwmod.DEFAULT
+
+    # ---------------- firmware ----------------
+    @property
+    def firmware(self):
+        return self._fw
+
+    def set_override(self, fw):
+        """fw: a Firmware to force, or None to follow what the vehicle reports."""
+        self.override = fw
+        self._update_firmware()
+
+    def _update_firmware(self):
+        fw = self.override or self.detected or fwmod.DEFAULT
+        if fw is not self._fw:
+            self._fw = fw
+            self.firmware_changed.emit(fw)
+
+    def _detect(self, hb):
+        fw, text = fwmod.detect(hb.autopilot, hb.type)
+        self.detected_text = text
+        if fw is not None and fw is not self.detected:
+            self.detected = fw
+            self._update_firmware()
+        elif fw is None:
+            self.statustext.emit(4, f"FlightDeck doesn't fully support this vehicle: {text}. "
+                                    f"Treating it as {self._fw.name}; change this from the firmware pill.")
 
     # ---------------- connection ----------------
     @property
@@ -211,6 +241,7 @@ class Link(QObject):
             self._m = m
             self.state.connected = True
             self.state.last_heartbeat = time.time()
+            self._detect(hb)
             self._handle(hb)
             self._request_streams()
             self.connection_changed.emit(True, f"Connected · {port}")
@@ -279,7 +310,7 @@ class Link(QObject):
             if src_ok and msg.get_srcComponent() == (m.target_component if m else 1):
                 st.last_heartbeat = time.time()
                 st.armed = bool(msg.base_mode & mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
-                st.mode = COPTER_MODES.get(msg.custom_mode, f"MODE {msg.custom_mode}")
+                st.mode = self._fw.mode_name(msg.base_mode, msg.custom_mode)
         elif t == "ATTITUDE":
             st.roll, st.pitch, st.yaw = msg.roll, msg.pitch, msg.yaw
         elif t == "VFR_HUD":
@@ -359,10 +390,10 @@ class Link(QObject):
             m.target_system, m.target_component, cmd, 0, *p))
 
     def set_mode(self, name):
-        num = COPTER_MODE_IDS.get(name)
-        if num is None:
+        args = self._fw.set_mode_params(name)
+        if args is None:
             return False
-        return self.command(mavlink.MAV_CMD_DO_SET_MODE, mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, num)
+        return self.command(mavlink.MAV_CMD_DO_SET_MODE, *args)
 
     def arm(self, arm=True, force=False):
         return self.command(mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 1 if arm else 0, 21196 if force else 0)

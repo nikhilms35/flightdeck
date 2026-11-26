@@ -22,8 +22,9 @@ CACHE = Path.home() / ".cache" / "flightdeck"
 TOOLS = "Read,Grep,Glob"
 
 SYSTEM = (
-    "You are running inside FlightDeck, a desktop ground control station for ArduPilot ArduCopter written in "
-    "Python/PySide6. The user is a hobby drone builder talking to you from the app's Claude tab. "
+    "You are running inside FlightDeck, a desktop ground control station for ArduPilot (Copter, Plane, Rover, Sub) "
+    "and PX4, written in Python/PySide6. The user is a hobbyist talking to you from the app's Claude tab. "
+    "The snapshot names the firmware; answer for that firmware's parameters and modes. "
     "Each message starts with a [Vehicle snapshot] block taken at the moment they pressed Send; treat it as live "
     "telemetry. The full parameter list (NAME = value) is in the file named in the snapshot; read it when a "
     "question depends on parameters. FlightDeck's source code is in the working directory. "
@@ -119,6 +120,8 @@ class ClaudePage(QWidget):
         recent = [t for t, ts in st.prearm.items() if time.time() - ts < 30]
         lines = [
             f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Firmware: {self.link.firmware.name}"
+            + (f" (vehicle reports {self.link.detected_text})" if self.link.detected_text else ""),
             f"Mode: {st.mode} · {'ARMED' if st.armed else 'disarmed'}",
             f"Attitude: roll {st.roll:.1f}°, pitch {st.pitch:.1f}°, heading {st.heading}°",
             f"Altitude: {st.alt_rel:.1f} m rel · climb {st.climb:+.1f} m/s · groundspeed {st.groundspeed:.1f} m/s",

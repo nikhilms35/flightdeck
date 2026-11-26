@@ -10,7 +10,7 @@ these third-party files, each under its own license:
 | Qt WebChannel JS | `flightdeck/assets/qwebchannel.js` | LGPL-3.0 / GPL-2.0 / GPL-3.0 (see file header) |
 | Inter font | `flightdeck/assets/fonts/InterVariable.ttf` | SIL OFL 1.1 (see `flightdeck/assets/fonts/Inter-LICENSE.txt`) |
 | JetBrains Mono font | `flightdeck/assets/fonts/JetBrainsMono-*.ttf` | SIL OFL 1.1 (see `flightdeck/assets/fonts/JetBrainsMono-OFL.txt`) |
-| ArduCopter parameter metadata | `flightdeck/assets/ArduCopter.apm.pdef.xml` | GPL-3.0 (ArduPilot project) |
+| ArduPilot parameter metadata (Copter, Plane, Rover, Sub) | `flightdeck/assets/*.apm.pdef.xml.gz` | GPL-3.0 (ArduPilot project, from autotest.ardupilot.org) |
 
 Python dependencies (installed via `requirements.txt`, not bundled): PySide6 (LGPL-3.0),
 pymavlink (LGPL-3.0), pyserial (BSD-3-Clause), pyqtgraph (MIT), NumPy (BSD-3-Clause).

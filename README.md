@@ -1,6 +1,6 @@
 # FlightDeck
 
-A lightweight desktop ground control station for ArduPilot (ArduCopter), written in Python with Qt (PySide6).
+A lightweight desktop ground control station for ArduPilot (Copter, Plane, Rover, Sub) and PX4, written in Python with Qt (PySide6).
 
 ## Features
 
@@ -17,6 +17,24 @@ A lightweight desktop ground control station for ArduPilot (ArduCopter), written
 - **Claude**: ask Claude about your drone, parameters and logs from inside the app (optional, see below)
 
 Connects over USB serial using MAVLink 2.
+
+## Supported flight controllers
+
+FlightDeck works with **any flight controller board** running a firmware that speaks MAVLink. When you connect, it
+reads the firmware and vehicle type from the vehicle and adapts. To override that, click the firmware pill at the
+left of the top bar.
+
+| Firmware | Support |
+|---|---|
+| **ArduCopter** (quad, hexa, octa, tri, Y6, heli) | Full: every page. Motor test and motor direction diagrams for Quad X/+, Hexa X/+ and Octa X |
+| **ArduPlane** (including QuadPlane) | Full except the multirotor pages (motor test, motor direction, Tune) |
+| **ArduRover** (rovers and boats) | Full except the multirotor pages |
+| **ArduSub** | Basic: telemetry, modes, parameters with descriptions, logs, sensor calibration and battery failsafe |
+| **PX4** | Basic: telemetry, map, modes, arming, radio check, mode switch and the raw parameter list. Use QGroundControl for PX4 sensor calibration and airframe setup |
+| **Betaflight, INAV** | Not supported. They use their own MSP protocol, not MAVLink |
+
+Most F4, F7 and H7 boards sold for Betaflight or INAV can be flashed with ArduPilot. Check the
+[ArduPilot firmware list](https://firmware.ardupilot.org/) for your board.
 
 ## Install
 
