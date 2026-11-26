@@ -388,7 +388,7 @@ class LogsPage(QWidget):
                 c = p.plot(t, y, pen=plots.pen(i), name=f"{m}.{f}")
                 curves.append((f, c))
             for t, mname in self.data.modes:
-                ln = pg.InfiniteLine(pos=t, angle=90, pen=pg.mkPen("#46566A", width=1, style=Qt.DashLine),
+                ln = pg.InfiniteLine(pos=t, angle=90, pen=pg.mkPen("#4A4A52", width=1, style=Qt.DashLine),
                                      label=mname if row == 0 else None,
                                      labelOpts=dict(position=0.95, color=plots.MUTED, fill=(11, 15, 20, 200)))
                 p.addItem(ln, ignoreBounds=True)

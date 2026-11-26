@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout
                                QVBoxLayout, QWidget)
 
 from ..link import ACCEL_POSITIONS, COPTER_MODES, COPTER_MODE_IDS
-from ..widgets import Card, ChannelBar, QuadXDiagram, button, label, set_kind
+from ..widgets import Card, ChannelBar, ModeRangeSlider, QuadXDiagram, button, label, set_kind
 
 
 def page(title, intro):
@@ -309,7 +309,8 @@ class SetupPage(QWidget):
         self.link.write_params(ch, job="setup")
 
     # ======================= flight modes =======================
-    MODE_RANGES = ["0–1230", "1231–1360", "1361–1490", "1491–1620", "1621–1749", "1750+"]
+    # ArduPilot's fixed FLTMODE1-6 PWM bands (slot 1 also covers anything below, slot 6 anything above)
+    MODE_RANGES = [(900, 1230), (1231, 1360), (1361, 1490), (1491, 1620), (1621, 1749), (1750, 2100)]
 
     def _modes(self):
         w, v = page("Flight modes", "Pick a switch channel and assign a mode to each position. "
@@ -323,26 +324,36 @@ class SetupPage(QWidget):
         top.addWidget(self.fm_ch)
         top.addStretch()
         self.fm_pwm = label("", "Muted")
+        self.fm_pwm.setTextFormat(Qt.RichText)
         top.addWidget(self.fm_pwm)
         c.add(top)
         g = QGridLayout()
         g.setHorizontalSpacing(12)
         g.setVerticalSpacing(8)
-        self.fm_boxes, self.fm_marks = [], []
+        self.fm_boxes, self.fm_marks, self.fm_sliders = [], [], []
         modes = sorted(COPTER_MODES.values(), key=lambda n: (n not in
                        ("STABILIZE", "ALT_HOLD", "LOITER", "POSHOLD", "RTL", "LAND", "ACRO"), n))
         for i in range(6):
             mark = label("●")
-            mark.setStyleSheet("color:#242D3A;")
+            mark.setStyleSheet("color:#2A2A2F;")
             g.addWidget(mark, i, 0)
-            g.addWidget(label(f"Mode {i + 1}"), i, 1)
+            lo, hi = self.MODE_RANGES[i]
+            name = QVBoxLayout()
+            name.setSpacing(0)
+            name.addWidget(label(f"Mode {i + 1}"))
+            name.addWidget(label(f"{'<' if i == 0 else ''}{lo if i else hi}"
+                                 f"{'' if i == 0 else ('+' if i == 5 else f'–{hi}')} µs", "Faint"))
+            g.addLayout(name, i, 1)
             cb = QComboBox()
             cb.addItems(modes)
+            cb.setMinimumWidth(150)
             g.addWidget(cb, i, 2)
-            g.addWidget(label(self.MODE_RANGES[i] + " µs", "Faint"), i, 3)
+            sl = ModeRangeSlider(lo, hi)
+            g.addWidget(sl, i, 3)
             self.fm_boxes.append(cb)
             self.fm_marks.append(mark)
-        g.setColumnStretch(2, 1)
+            self.fm_sliders.append(sl)
+        g.setColumnStretch(3, 1)
         c.add(g)
         r = QHBoxLayout()
         r.addStretch()
@@ -701,8 +712,12 @@ class SetupPage(QWidget):
                 bounds = [1230, 1360, 1490, 1620, 1749]
                 slot = next((i for i, b in enumerate(bounds) if pwm <= b), 5)
             self.fm_pwm.setText(f"Channel {ch}: {pwm} µs" if pwm else f"Channel {ch}: no signal")
+            if pwm:
+                self.fm_pwm.setText(f"Channel {ch}: {pwm} µs → <b>{self.fm_boxes[slot].currentText()}</b>")
             for i, m in enumerate(self.fm_marks):
-                m.setStyleSheet("color:#3D8BFD;" if i == slot else "color:#242D3A;")
+                m.setStyleSheet("color:#2FBF71;" if i == slot else "color:#2A2A2F;")
+            for sl in self.fm_sliders:
+                sl.set_value(pwm)
         elif idx == 7:  # battery & failsafe
             cells = round(st.batt_v / 4.2) if st.batt_v > 5 else 0
             if cells:

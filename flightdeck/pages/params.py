@@ -20,7 +20,8 @@ def load_metadata():
         if el.tag != "param":
             continue
         name = el.get("name", "").split(":")[-1]
-        d = dict(human=el.get("humanName", ""), doc=el.get("documentation", ""), units="", range="", values={})
+        d = dict(human=el.get("humanName", ""), doc=el.get("documentation", ""), units="", range="", values={},
+                 bits={})
         for fld in el.findall("field"):
             if fld.get("name") == "Units":
                 d["units"] = fld.text or ""
@@ -31,6 +32,13 @@ def load_metadata():
             for v in vals.findall("value"):
                 try:
                     d["values"][float(v.get("code"))] = v.text or ""
+                except (TypeError, ValueError):
+                    pass
+        bits = el.find("bitmask")
+        if bits is not None:
+            for b in bits:
+                try:
+                    d["bits"][int(b.get("code"))] = (b.text or "").strip()
                 except (TypeError, ValueError):
                     pass
         meta.setdefault(name, d)

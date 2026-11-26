@@ -65,7 +65,7 @@ class WebView(QWebEngineView):
         s.setAttribute(QWebEngineSettings.LocalContentCanAccessFileUrls, True)
         s.setAttribute(QWebEngineSettings.WebGLEnabled, True)
         s.setAttribute(QWebEngineSettings.Accelerated2dCanvasEnabled, True)
-        self.page().setBackgroundColor("#0B0F14")
+        self.page().setBackgroundColor("#0A0A0B")
         self.bridge = _Bridge()
         self.channel = QWebChannel(self.page())
         self.channel.registerObject("bridge", self.bridge)

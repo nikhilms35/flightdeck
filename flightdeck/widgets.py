@@ -56,6 +56,7 @@ class Pill(QLabel):
         super().__init__(text)
         self.setObjectName("Pill")
         self.setAlignment(Qt.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)  # never clip the text
         set_kind(self, kind)
 
     def set(self, text, kind=None):
@@ -276,6 +277,78 @@ class ChannelBar(QWidget):
         p.setFont(theme.mono(9, True))
         p.drawText(QRectF(w - val_w, 0, val_w, h), Qt.AlignVCenter | Qt.AlignRight,
                    str(self.value) if self.value else "—")
+        p.end()
+
+
+class ModeRangeSlider(QWidget):
+    """INAV-style mode range: a 900-2100us track with the mode's band highlighted and a live
+    marker showing where the switch channel is. The band turns green while the marker is inside it."""
+
+    LO, HI = 900, 2100
+    TICKS = (900, 1000, 1200, 1400, 1500, 1600, 1800, 2000, 2100)
+
+    def __init__(self, lo, hi):
+        super().__init__()
+        self.lo, self.hi = lo, hi
+        self.value = 0
+        self.setMinimumHeight(40)
+        self.setMinimumWidth(260)
+
+    def set_value(self, value):
+        if value != self.value:
+            self.value = value
+            self.update()
+
+    def active(self):
+        v = self.value
+        return bool(v) and (self.lo <= self.LO or v >= self.lo) and (self.hi >= self.HI or v <= self.hi)
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w = self.width()
+        pad = 14
+        track = QRectF(pad, 10, w - 2 * pad, 8)
+
+        def x_of(us):
+            return track.left() + (min(max(us, self.LO), self.HI) - self.LO) / (self.HI - self.LO) * track.width()
+
+        # track
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(T["surface2"]))
+        p.drawRoundedRect(track, 4, 4)
+        # ticks + labels
+        p.setFont(theme.mono(7))
+        for us in self.TICKS:
+            x = x_of(us)
+            major = us in (900, 1500, 2100)
+            p.setPen(QPen(QColor(T["border_hi"] if major else T["border"]), 1))
+            p.drawLine(QPointF(x, track.bottom() + 2), QPointF(x, track.bottom() + (6 if major else 4)))
+            if us in (900, 1200, 1500, 1800, 2100):
+                p.setPen(QColor(T["faint"]))
+                p.drawText(QRectF(x - 20, track.bottom() + 6, 40, 12), Qt.AlignHCenter | Qt.AlignTop, str(us))
+        # band
+        on = self.active()
+        band = QRectF(x_of(self.lo), track.top(), max(x_of(self.hi) - x_of(self.lo), 3), track.height())
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(T["ok"] if on else T["accent"]))
+        if not on:
+            p.setOpacity(0.55)
+        p.drawRoundedRect(band, 3, 3)
+        p.setOpacity(1)
+        # band handles
+        p.setBrush(QColor(T["text"] if on else T["muted"]))
+        for x in (band.left(), band.right()):
+            p.drawRoundedRect(QRectF(x - 2, track.top() - 3, 4, track.height() + 6), 2, 2)
+        # live marker
+        if self.value:
+            x = x_of(self.value)
+            col = QColor(T["warn"])
+            p.setPen(QPen(col, 2))
+            p.drawLine(QPointF(x, track.top() - 4), QPointF(x, track.bottom() + 4))
+            p.setPen(Qt.NoPen)
+            p.setBrush(col)
+            p.drawPolygon(QPolygonF([QPointF(x - 5, 0), QPointF(x + 5, 0), QPointF(x, 6)]))
         p.end()
 
 
