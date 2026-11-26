@@ -6,26 +6,26 @@
 <script src="leaflet/leaflet.js"></script>
 <script src="qwebchannel.js"></script>
 <style>
-  html, body, #map { margin: 0; height: 100%; background: #0B0F14; }
-  .leaflet-container { font-family: Inter, sans-serif; background: #0B0F14; }
+  html, body, #map { margin: 0; height: 100%; background: #0A0A0B; }
+  .leaflet-container { font-family: Inter, sans-serif; background: #0A0A0B; }
   .leaflet-control-layers, .leaflet-bar a, .leaflet-control-attribution {
-    background: rgba(17,22,29,.92) !important; color: #C9D3DD !important; border-color: #242D3A !important; }
-  .leaflet-control-attribution a { color: #8FB8FF !important; }
-  .leaflet-bar { border: 1px solid #242D3A !important; border-radius: 8px !important; overflow: hidden; }
+    background: rgba(18,18,20,.92) !important; color: #D4D4D8 !important; border-color: #2A2A2F !important; }
+  .leaflet-control-attribution a { color: #FF8A93 !important; }
+  .leaflet-bar { border: 1px solid #2A2A2F !important; border-radius: 8px !important; overflow: hidden; }
   .leaflet-control-layers { border-radius: 8px !important; }
-  .wp { width: 26px; height: 26px; border-radius: 13px; background: #3D8BFD; color: #fff;
+  .wp { width: 26px; height: 26px; border-radius: 13px; background: #E5202E; color: #fff;
         font: 700 11px/26px "JetBrains Mono", monospace; text-align: center;
         border: 2px solid #fff; box-shadow: 0 2px 8px rgba(0,0,0,.5); }
   .wp.takeoff { background: #2FBF71; } .wp.land { background: #F05A52; } .wp.loiter { background: #E8A93A; }
   .home { width: 24px; height: 24px; border-radius: 6px; background: #E8A93A; color: #111;
           font: 800 12px/24px Inter, sans-serif; text-align: center; border: 2px solid #fff; }
   .hint { position: absolute; z-index: 1000; left: 50%; transform: translateX(-50%); top: 12px;
-          background: rgba(17,22,29,.92); color: #C9D3DD; padding: 6px 12px; border-radius: 16px;
-          font: 600 12px Inter, sans-serif; border: 1px solid #242D3A; display: none; }
-  .follow { position: absolute; z-index: 1000; right: 10px; bottom: 28px; background: rgba(17,22,29,.92);
-            color: #C9D3DD; border: 1px solid #242D3A; padding: 6px 10px; border-radius: 8px;
+          background: rgba(18,18,20,.92); color: #D4D4D8; padding: 6px 12px; border-radius: 16px;
+          font: 600 12px Inter, sans-serif; border: 1px solid #2A2A2F; display: none; }
+  .follow { position: absolute; z-index: 1000; right: 10px; bottom: 28px; background: rgba(18,18,20,.92);
+            color: #D4D4D8; border: 1px solid #2A2A2F; padding: 6px 10px; border-radius: 8px;
             font: 600 12px Inter, sans-serif; cursor: pointer; user-select: none; }
-  .follow.on { color: #5C9FFF; border-color: #23426B; }
+  .follow.on { color: #FF4757; border-color: #5C1A20; }
 </style>
 </head>
 <body>
@@ -105,9 +105,9 @@ new QWebChannel(qt.webChannelTransport, ch => { bridge = ch.objects.bridge; brid
 
 // ---- vehicle ----
 const droneSvg = h => `<svg width="40" height="40" viewBox="-20 -20 40 40" style="transform:rotate(${h}deg)">
-  <circle r="17" fill="rgba(61,139,253,.18)" stroke="rgba(61,139,253,.6)"/>
-  <path d="M0,-13 L9,10 L0,5 L-9,10 Z" fill="#3D8BFD" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>`;
-let drone = null, trail = L.polyline([], {color: '#5C9FFF', weight: 2.5, opacity: .8}).addTo(map);
+  <circle r="17" fill="rgba(229,32,46,.18)" stroke="rgba(229,32,46,.6)"/>
+  <path d="M0,-13 L9,10 L0,5 L-9,10 Z" fill="#E5202E" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/></svg>`;
+let drone = null, trail = L.polyline([], {color: '#FF4757', weight: 2.5, opacity: .8}).addTo(map);
 let follow = true, centeredOnce = false;
 const followBtn = document.getElementById('follow');
 followBtn.onclick = () => { follow = !follow; followBtn.classList.toggle('on', follow); };

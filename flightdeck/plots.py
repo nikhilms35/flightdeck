@@ -1,5 +1,5 @@
 """pyqtgraph styling shared by live graphs and log plots.
-Colours: dataviz reference palette, dark steps, validated against our chart surface #11161D
+Colours: dataviz reference palette, dark steps, validated against our chart surface #121214
 (all checks pass: lightness band, chroma, adjacent CVD dE >= 8.4, normal-vision >= 19.3, contrast >= 3:1)."""
 import numpy as np
 import pyqtgraph as pg
@@ -10,7 +10,7 @@ from . import theme
 from .theme import T
 
 SERIES = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
-SURFACE = "#11161D"
+SURFACE = "#121214"
 GRID = "#2c2c2a"
 AXIS = "#383835"
 MUTED = "#898781"
@@ -45,9 +45,9 @@ class Crosshair:
         self.plot = plot
         self.curves_fn = curves_fn
         self.fmt = fmt
-        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#5C6876", width=1))
-        self.label = pg.TextItem(anchor=(0, 1), color=T["text"], fill=pg.mkBrush(11, 15, 20, 220),
-                                 border=pg.mkPen("#32404F"))
+        self.vline = pg.InfiniteLine(angle=90, movable=False, pen=pg.mkPen("#63636B", width=1))
+        self.label = pg.TextItem(anchor=(0, 1), color=T["text"], fill=pg.mkBrush(10, 10, 11, 220),
+                                 border=pg.mkPen("#3A3A40"))
         self.label.setFont(theme.mono(8))
         for it in (self.vline, self.label):
             it.setZValue(100)
@@ -84,7 +84,7 @@ def legend(plot, names):
     """Legend for >= 2 series (a single series is named by the title instead)."""
     if len(names) < 2:
         return None
-    lg = plot.addLegend(offset=(-8, 8), labelTextColor=T["text"], brush=pg.mkBrush(11, 15, 20, 200),
-                        pen=pg.mkPen("#32404F"))
+    lg = plot.addLegend(offset=(-8, 8), labelTextColor=T["text"], brush=pg.mkBrush(10, 10, 11, 200),
+                        pen=pg.mkPen("#3A3A40"))
     lg.setLabelTextSize("8pt")
     return lg

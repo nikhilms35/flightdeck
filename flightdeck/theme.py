@@ -5,18 +5,18 @@ from PySide6.QtGui import QFont, QFontDatabase
 ASSETS = Path(__file__).resolve().parent / "assets"
 
 T = dict(
-    bg="#0B0F14",
-    surface="#11161D",
-    surface2="#161C25",
-    raised="#1C2430",
-    border="#242D3A",
-    border_hi="#32404F",
-    text="#E6EDF3",
-    muted="#8B98A6",
-    faint="#5C6876",
-    accent="#3D8BFD",
-    accent_hi="#5C9FFF",
-    accent_soft="#16263D",
+    bg="#0A0A0B",
+    surface="#121214",
+    surface2="#18181B",
+    raised="#1F1F23",
+    border="#2A2A2F",
+    border_hi="#3A3A40",
+    text="#F2F2F3",
+    muted="#9A9AA2",
+    faint="#63636B",
+    accent="#E5202E",
+    accent_hi="#FF4757",
+    accent_soft="#2B0D10",
     ok="#2FBF71",
     ok_soft="#10291D",
     warn="#E8A93A",
@@ -49,8 +49,19 @@ def mono(size=10, bold=False):
     return f
 
 
-def stylesheet():
-    t = T
+def _rgba(hex_col, a):
+    h = hex_col.lstrip("#")
+    return f"rgba({int(h[0:2], 16)},{int(h[2:4], 16)},{int(h[4:6], 16)},{a:.2f})"
+
+
+def stylesheet(opacity=1.0):
+    """opacity < 1 makes the window background and panels see-through (needs a compositing desktop).
+    Panels stay a little more solid than the background so text on them stays readable."""
+    t = dict(T)
+    if opacity < 1:
+        t["bg"] = _rgba(T["bg"], opacity)
+        for k in ("surface", "surface2", "raised"):
+            t[k] = _rgba(T[k], min(1.0, opacity + 0.12))
     return f"""
 * {{ font-family: "{UI_FONT}"; color: {t['text']}; }}
 QMainWindow, QWidget#Root {{ background: {t['bg']}; }}
@@ -93,17 +104,17 @@ QLabel#Pill {{ border-radius: 11px; padding: 3px 10px; font-size: 8.5pt; font-we
 QLabel#Pill[kind="ok"] {{ background: {t['ok_soft']}; color: {t['ok']}; border-color: #1C4A31; }}
 QLabel#Pill[kind="warn"] {{ background: {t['warn_soft']}; color: {t['warn']}; border-color: #5A4418; }}
 QLabel#Pill[kind="danger"] {{ background: {t['danger_soft']}; color: {t['danger']}; border-color: #5E2328; }}
-QLabel#Pill[kind="accent"] {{ background: {t['accent_soft']}; color: {t['accent_hi']}; border-color: #23426B; }}
+QLabel#Pill[kind="accent"] {{ background: {t['accent_soft']}; color: {t['accent_hi']}; border-color: #5C1A20; }}
 
 /* ---------- buttons ---------- */
 QPushButton {{ background: {t['raised']}; border: 1px solid {t['border_hi']}; border-radius: 8px;
                padding: 7px 14px; font-weight: 600; }}
-QPushButton:hover {{ background: #243042; border-color: #3D4C5E; }}
-QPushButton:pressed {{ background: #1A2230; }}
+QPushButton:hover {{ background: #2A2A30; border-color: #4A4A52; }}
+QPushButton:pressed {{ background: #18181B; }}
 QPushButton:disabled {{ color: {t['faint']}; background: {t['surface2']}; border-color: {t['border']}; }}
 QPushButton[kind="primary"] {{ background: {t['accent']}; border-color: {t['accent']}; color: white; }}
 QPushButton[kind="primary"]:hover {{ background: {t['accent_hi']}; border-color: {t['accent_hi']}; }}
-QPushButton[kind="primary"]:disabled {{ background: #22344F; border-color: #22344F; color: #7D8FA8; }}
+QPushButton[kind="primary"]:disabled {{ background: #3A1418; border-color: #3A1418; color: #A8797E; }}
 QPushButton[kind="danger"] {{ background: {t['danger_soft']}; border-color: #6B272C; color: {t['danger']}; }}
 QPushButton[kind="danger"]:hover {{ background: #46191E; }}
 QPushButton[kind="ok"] {{ background: {t['ok_soft']}; border-color: #1F5236; color: {t['ok']}; }}
@@ -114,7 +125,7 @@ QPushButton[kind="ghost"]:hover {{ background: {t['surface2']}; color: {t['text'
 QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox {{
     background: {t['surface2']}; border: 1px solid {t['border_hi']}; border-radius: 8px;
     padding: 6px 10px; selection-background-color: {t['accent']}; min-height: 18px; }}
-QComboBox:hover, QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {{ border-color: #415064; }}
+QComboBox:hover, QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover {{ border-color: #505058; }}
 QComboBox:focus, QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{ border-color: {t['accent']}; }}
 QComboBox::drop-down {{ border: none; width: 22px; }}
 QComboBox QAbstractItemView {{ background: {t['raised']}; border: 1px solid {t['border_hi']};
@@ -145,10 +156,13 @@ QProgressBar::chunk {{ background: {t['accent']}; border-radius: 5px; }}
 
 QScrollBar:vertical {{ background: transparent; width: 10px; margin: 2px; }}
 QScrollBar::handle:vertical {{ background: {t['border_hi']}; border-radius: 4px; min-height: 30px; }}
-QScrollBar::handle:vertical:hover {{ background: #46566A; }}
+QScrollBar::handle:vertical:hover {{ background: #4A4A52; }}
 QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{ background: {t['border_hi']}; border-radius: 4px; min-width: 30px; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ background: none; border: none; width: 0; height: 0; }}
+QSlider::groove:horizontal {{ background: {t['surface2']}; height: 4px; border-radius: 2px; }}
+QSlider::sub-page:horizontal {{ background: {t['accent']}; border-radius: 2px; }}
+QSlider::handle:horizontal {{ background: {t['text']}; width: 12px; margin: -5px 0; border-radius: 6px; }}
 QSplitter::handle {{ background: {t['border']}; }}
 QScrollArea {{ border: none; }}
 """

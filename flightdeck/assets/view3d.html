@@ -7,10 +7,10 @@
 <link rel="stylesheet" href="cesium/Widgets/widgets.css">
 <script src="qwebchannel.js"></script>
 <style>
-  html, body, #v { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0B0F14; }
+  html, body, #v { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0A0A0B; }
   .cesium-viewer-bottom { opacity: .75; }
-  #hud { position: absolute; left: 12px; top: 12px; z-index: 10; background: rgba(11,15,20,.82);
-         border: 1px solid #242D3A; border-radius: 10px; padding: 8px 12px; color: #E6EDF3;
+  #hud { position: absolute; left: 12px; top: 12px; z-index: 10; background: rgba(10,10,11,.82);
+         border: 1px solid #2A2A2F; border-radius: 10px; padding: 8px 12px; color: #F2F2F3;
          font: 600 12px/1.5 "JetBrains Mono", monospace; pointer-events: none; white-space: pre; }
   #cross { position: absolute; left: 50%; top: 50%; width: 22px; height: 22px; margin: -11px 0 0 -11px;
            z-index: 10; pointer-events: none; display: none; }
@@ -149,11 +149,11 @@ function drawHome() {
 const droneEnt = viewer.entities.add({
   show: false,
   position: Cesium.Cartesian3.fromDegrees(0, 0, 0),
-  point: {pixelSize: 14, color: Cesium.Color.fromCssColorString('#3D8BFD'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2,
+  point: {pixelSize: 14, color: Cesium.Color.fromCssColorString('#E5202E'), outlineColor: Cesium.Color.WHITE, outlineWidth: 2,
           disableDepthTestDistance: Number.POSITIVE_INFINITY},
 });
 const stalk = viewer.entities.add({show: false, polyline: {positions: [], width: 1.5,
-  material: Cesium.Color.fromCssColorString('#3D8BFD').withAlpha(0.6)}});
+  material: Cesium.Color.fromCssColorString('#E5202E').withAlpha(0.6)}});
 function setVehicle(lat, lon, alt, hdg, pitch, roll) {
   drone = {lat, lon, alt, hdg, pitch, roll};
   if (!home) return;
@@ -207,7 +207,7 @@ async function redrawMission() {
     const g = await groundAt(w.lat, w.lon), abs = ref + w.alt, clr = abs - g;
     rows.push({n: w.n, alt: w.alt, clearance: clr});
     path.push(w.lon, w.lat, abs);
-    const col = clr < 10 ? '#F05A52' : clr < 20 ? '#E8A93A' : '#3D8BFD';
+    const col = clr < 10 ? '#F05A52' : clr < 20 ? '#E8A93A' : '#2FBF71';
     missionEnts.push(viewer.entities.add({position: Cesium.Cartesian3.fromDegrees(w.lon, w.lat, abs),
       point: {pixelSize: 11, color: Cesium.Color.fromCssColorString(col), outlineColor: Cesium.Color.WHITE, outlineWidth: 2},
       label: {text: String(w.n), font: '700 13px Inter', fillColor: Cesium.Color.WHITE, outlineColor: Cesium.Color.BLACK,

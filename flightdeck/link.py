@@ -42,6 +42,31 @@ SENSOR_BITS = {
 }
 
 
+# USB-to-UART bridge chips (FTDI, CP210x, CH340, PL2303): telemetry radios and adapters, not a flight controller's own USB
+_UART_BRIDGE_VIDS = {0x0403, 0x10C4, 0x1A86, 0x067B}
+
+
+def serial_ports():
+    """[(device, label, is_fc)] for USB serial ports on Linux, macOS and Windows, flight controllers first.
+    Flight controllers enumerate as USB CDC: /dev/ttyACM* (Linux), /dev/cu.usbmodem* (macOS), COMn (Windows)."""
+    from serial.tools import list_ports
+    out = []
+    for p in list_ports.comports():
+        if p.device.startswith("/dev/tty.") or (p.vid is None and "ArduPilot" not in (p.manufacturer or "")):
+            continue   # macOS lists each port twice (cu./tty.) - keep cu.; skip non-USB ports (Bluetooth, onboard)
+        desc = p.product or p.description or ""
+        is_fc = "ArduPilot" in (p.manufacturer or "") or "ArduPilot" in desc or p.vid not in _UART_BRIDGE_VIDS
+        label = f"{p.device}  ·  {desc}" if desc and desc != "n/a" and desc != p.device else p.device
+        out.append((p.device, label, is_fc))
+    out.sort(key=lambda x: (not x[2], x[0]))
+    return out
+
+
+def is_fc_usb(port):
+    """True when `port` is a flight controller's own USB connection (rather than a telemetry radio)."""
+    return any(d == port and fc for d, _, fc in serial_ports())
+
+
 @dataclass
 class VehicleState:
     connected: bool = False
