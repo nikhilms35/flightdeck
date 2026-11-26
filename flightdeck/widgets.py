@@ -472,28 +472,48 @@ class ParamForm(QFrame):
             self.link.write_params(ch, job="form")
 
 
-class QuadXDiagram(QWidget):
-    """Top-down quad X with ArduPilot motor-test letters and spin directions."""
-    # (letter, motor/output number, x, y, ccw) — motor-test letters always go clockwise from front-right
+class MotorDiagram(QWidget):
+    """Top-down multirotor with ArduPilot motor-test letters, output numbers and spin directions.
+    Layouts follow ArduPilot's AP_MotorsMatrix: motor-test letters go clockwise from the front(-right),
+    the number is the output (MOTn / SERVOn) that drives that motor."""
+    # (FRAME_CLASS, FRAME_TYPE) -> [(letter, output, angle from nose in degrees (clockwise +), ccw)]
     LAYOUTS = {
-        1: [("A", 1, 1, -1, True), ("B", 4, 1, 1, False), ("C", 2, -1, 1, True), ("D", 3, -1, -1, False)],
-        12: [("A", 2, 1, -1, True), ("B", 1, 1, 1, False), ("C", 3, -1, 1, True), ("D", 4, -1, -1, False)],
-        18: [("A", 2, 1, -1, False), ("B", 1, 1, 1, True), ("C", 3, -1, 1, False), ("D", 4, -1, -1, True)],
+        (1, 1): [("A", 1, 45, True), ("B", 4, 135, False), ("C", 2, -135, True), ("D", 3, -45, False)],      # Quad X
+        (1, 0): [("A", 3, 0, False), ("B", 1, 90, True), ("C", 4, 180, False), ("D", 2, -90, True)],         # Quad +
+        (1, 12): [("A", 2, 45, True), ("B", 1, 135, False), ("C", 3, -135, True), ("D", 4, -45, False)],     # BF X
+        (1, 18): [("A", 2, 45, False), ("B", 1, 135, True), ("C", 3, -135, False), ("D", 4, -45, True)],     # BF X rev
+        (2, 1): [("A", 5, 30, True), ("B", 1, 90, False), ("C", 4, 150, True),                              # Hexa X
+                 ("D", 6, -150, False), ("E", 2, -90, True), ("F", 3, -30, False)],
+        (2, 0): [("A", 1, 0, False), ("B", 4, 60, True), ("C", 6, 120, False),                              # Hexa +
+                 ("D", 2, 180, True), ("E", 3, -120, False), ("F", 5, -60, True)],
+        (3, 1): [("A", 1, 22.5, False), ("B", 3, 67.5, True), ("C", 8, 112.5, False), ("D", 4, 157.5, True),  # Octa X
+                 ("E", 2, -157.5, False), ("F", 6, -112.5, True), ("G", 7, -67.5, False), ("H", 5, -22.5, True)],
     }
-    MOTORS = LAYOUTS[1]
+    NAMES = {(1, 1): "Quad X", (1, 0): "Quad +", (1, 12): "Quad X (Betaflight order)",
+             (1, 18): "Quad X (Betaflight order, reversed)", (2, 1): "Hexa X", (2, 0): "Hexa +", (3, 1): "Octa X"}
 
     @classmethod
-    def layout(cls, frame_type):
-        return cls.LAYOUTS.get(int(frame_type), cls.LAYOUTS[1])
+    def supported(cls, frame_class, frame_type):
+        return (int(frame_class), int(frame_type)) in cls.LAYOUTS
+
+    @classmethod
+    def layout(cls, frame_class, frame_type):
+        return cls.LAYOUTS.get((int(frame_class), int(frame_type)), cls.LAYOUTS[(1, 1)])
+
+    @staticmethod
+    def position_name(angle):
+        a = (angle + 360) % 360
+        names = ["front", "front-right", "right", "rear-right", "rear", "rear-left", "left", "front-left"]
+        return names[int(((a + 22.5) % 360) // 45)]
 
     def __init__(self):
         super().__init__()
         self.active = None
-        self.MOTORS = self.LAYOUTS[1]
-        self.setMinimumSize(240, 240)
+        self.MOTORS = self.layout(1, 1)
+        self.setMinimumSize(260, 260)
 
-    def set_frame(self, frame_type):
-        self.MOTORS = self.layout(frame_type)
+    def set_frame(self, frame_class, frame_type):
+        self.MOTORS = self.layout(frame_class, frame_type)
         self.update()
 
     def set_active(self, letter):
@@ -504,25 +524,26 @@ class QuadXDiagram(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
-        cx, cy = w / 2, h / 2
-        s = min(w, h) * 0.30
-        # deadcat-ish arms (front arms splayed wider)
-        p.setPen(QPen(QColor(T["border_hi"]), 9, Qt.SolidLine, Qt.RoundCap))
-        for _, _, x, y, _ in self.MOTORS:
-            p.drawLine(QPointF(cx, cy), QPointF(cx + x * s, cy + y * s))
+        cx, cy = w / 2, h / 2 + 6
+        n = len(self.MOTORS)
+        s = min(w, h - 20) * (0.36 if n <= 4 else 0.38)        # distance from centre to each motor
+        r = min(s * 0.30, math.pi * s / n * 0.8)                 # motor circle radius
+        pts = [(L, num, cx + s * math.sin(math.radians(a)), cy - s * math.cos(math.radians(a)), ccw)
+               for L, num, a, ccw in self.MOTORS]
+        p.setPen(QPen(QColor(T["border_hi"]), 8 if n <= 4 else 6, Qt.SolidLine, Qt.RoundCap))
+        for _, _, mx, my, _ in pts:
+            p.drawLine(QPointF(cx, cy), QPointF(mx, my))
         p.setBrush(QColor(T["raised"]))
         p.setPen(QPen(QColor(T["border_hi"]), 1.5))
-        p.drawRoundedRect(QRectF(cx - 22, cy - 30, 44, 60), 8, 8)
+        p.drawRoundedRect(QRectF(cx - 20, cy - 28, 40, 56), 8, 8)
         # nose arrow
         p.setBrush(QColor(T["accent"]))
         p.setPen(Qt.NoPen)
-        p.drawPolygon(QPolygonF([QPointF(cx, cy - 26), QPointF(cx - 8, cy - 12), QPointF(cx + 8, cy - 12)]))
+        p.drawPolygon(QPolygonF([QPointF(cx, cy - 24), QPointF(cx - 8, cy - 10), QPointF(cx + 8, cy - 10)]))
         p.setPen(QColor(T["muted"]))
         p.setFont(QFont(theme.UI_FONT, 8, QFont.Bold))
-        p.drawText(QRectF(cx - 40, 2, 80, 16), Qt.AlignCenter, "FRONT")
-        for letter, num, x, y, ccw in self.MOTORS:
-            mx, my = cx + x * s, cy + y * s
-            r = s * 0.42
+        p.drawText(QRectF(cx - 40, 0, 80, 14), Qt.AlignCenter, "FRONT")
+        for letter, num, mx, my, ccw in pts:
             on = self.active == letter
             p.setBrush(QColor(T["accent_soft"] if on else T["surface2"]))
             p.setPen(QPen(QColor(T["accent"] if on else T["border_hi"]), 2))
@@ -539,15 +560,16 @@ class QuadXDiagram(QWidget):
             tang = ea + (math.pi / 2 if ccw else -math.pi / 2)
             tx, ty = math.cos(tang), -math.sin(tang)
             nx, ny = -ty, tx
+            hs = max(4.0, r * 0.16)
             p.setBrush(col)
             p.setPen(Qt.NoPen)
-            p.drawPolygon(QPolygonF([QPointF(ex + tx * 7, ey + ty * 7), QPointF(ex + nx * 5, ey + ny * 5),
-                                     QPointF(ex - nx * 5, ey - ny * 5)]))
+            p.drawPolygon(QPolygonF([QPointF(ex + tx * hs * 1.4, ey + ty * hs * 1.4), QPointF(ex + nx * hs, ey + ny * hs),
+                                     QPointF(ex - nx * hs, ey - ny * hs)]))
             p.setPen(QColor(T["text"]))
-            p.setFont(QFont(theme.UI_FONT, 13, QFont.Bold))
-            p.drawText(QRectF(mx - r, my - r, 2 * r, 2 * r - 8), Qt.AlignCenter, letter)
+            p.setFont(QFont(theme.UI_FONT, 13 if n <= 4 else 11, QFont.Bold))
+            p.drawText(QRectF(mx - r, my - r, 2 * r, 2 * r - (8 if n <= 4 else 6)), Qt.AlignCenter, letter)
             p.setFont(QFont(theme.UI_FONT, 7))
             p.setPen(QColor(T["muted"]))
             p.drawText(QRectF(mx - r, my + 2, 2 * r, r - 2), Qt.AlignCenter,
-                       f"M{num} · {'CCW' if ccw else 'CW'}")
+                       f"M{num} · {'CCW' if ccw else 'CW'}" if n <= 4 else f"M{num}")
         p.end()

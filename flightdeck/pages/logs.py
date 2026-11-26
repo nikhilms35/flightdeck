@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QFileDialog, QHBoxL
 from pymavlink import DFReader
 
 from .. import plots
-from ..link import COPTER_MODES
+from .. import firmware as fwmod
 from ..widgets import Card, button, label
 
 LOG_DIR = Path.home() / "flightdeck" / "logs"
@@ -41,8 +41,11 @@ class LogData:
         self.texts = []     # (t, text)
 
     @classmethod
-    def load(cls, path, progress=None):
+    def load(cls, path, progress=None, default_fw=None):
+        """default_fw: firmware to decode mode numbers with if the log doesn't say which vehicle wrote it."""
         d = cls()
+        fw = None
+        raw_modes = []
         r = DFReader.DFReader_binary(str(path), zero_time_base=True)
         t0 = None
         n = 0
@@ -60,7 +63,15 @@ class LogData:
                 t0 = tus
             t = (tus - t0) / 1e6
             if typ == "MODE":
-                d.modes.append((t, COPTER_MODES.get(getattr(m, "ModeNum", getattr(m, "Mode", -1)), "?")))
+                raw_modes.append((t, getattr(m, "ModeNum", getattr(m, "Mode", -1))))
+            elif typ == "MSG" and fw is None:
+                # the first messages name the firmware, e.g. "ArduPlane V4.5.7 (…)"
+                txt = getattr(m, "Message", "")
+                for name, key in (("ArduCopter", "copter"), ("ArduPlane", "plane"), ("ArduRover", "rover"),
+                                  ("Rover", "rover"), ("ArduSub", "sub")):
+                    if txt.startswith(name):
+                        fw = fwmod.ALL[key]
+                        break
             elif typ in ("MSG", "ERR", "EV"):
                 d.texts.append((t, f"{typ}: " + (getattr(m, "Message", "") if typ == "MSG"
                                                   else ", ".join(f"{k}={getattr(m, k)}" for k in m._fieldnames
@@ -86,6 +97,8 @@ class LogData:
         for key, rec in d.msgs.items():
             for f in rec:
                 rec[f] = np.asarray(rec[f], dtype=float)
+        d.firmware = fw or default_fw or fwmod.DEFAULT
+        d.modes = [(t, d.firmware.log_mode_name(num)) for t, num in raw_modes]
         return d
 
     def series(self, msg, field):
@@ -278,7 +291,7 @@ class LogsPage(QWidget):
 
         def work():
             try:
-                d = LogData.load(path, lambda f: self._loader.progress.emit(f))
+                d = LogData.load(path, lambda f: self._loader.progress.emit(f), self.link.firmware)
                 self._loader.done.emit(d, path)
             except Exception as e:
                 self._loader.done.emit(None, f"{path}: {e}")

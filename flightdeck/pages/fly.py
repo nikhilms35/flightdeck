@@ -5,7 +5,6 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (QComboBox, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QMenu, QMessageBox,
                                QScrollArea, QSplitter, QVBoxLayout, QWidget)
 
-from ..link import COPTER_MODES
 from ..mapview import MapView
 from ..theme import T
 from ..widgets import HUD, Card, Tile, button, label
@@ -13,8 +12,8 @@ from ..widgets import HUD, Card, Tile, button, label
 # PreArm text fragment -> what to do about it
 PREARM_HINTS = [
     ("RC not calibrated", "Calibrate your radio: Setup › Radio."),
-    ("RC not found", "No receiver signal. Check ELRS bind (solid LED) and wiring on UART2."),
-    ("Radio failsafe", "No receiver signal. Turn on the Pocket and check the ELRS link."),
+    ("RC not found", "No receiver signal. Check the receiver is bound (solid LED) and wired to the right UART."),
+    ("Radio failsafe", "No receiver signal. Turn on your transmitter and check the radio link."),
     ("Throttle below failsafe", "Throttle channel is below FS_THR_VALUE. Calibrate the radio."),
     ("3D Accel calibration needed", "Run the accelerometer calibration: Setup › Accelerometer."),
     ("Accels inconsistent", "Accels disagree. Re-run accel calibration and keep the FC still."),
@@ -32,9 +31,6 @@ PREARM_HINTS = [
     ("High GPS HDOP", "GPS accuracy is poor. Wait for more satellites."),
     ("Gyros", "Gyros not settled. Keep the drone completely still."),
 ]
-
-QUICK_MODES = ["STABILIZE", "ALT_HOLD", "LOITER", "POSHOLD", "RTL", "LAND", "ACRO", "AUTO", "GUIDED", "BRAKE"]
-
 
 def hint_for(text):
     for frag, hint in PREARM_HINTS:
@@ -85,14 +81,14 @@ class FlyPage(QWidget):
         row = QHBoxLayout()
         row.setSpacing(8)
         self.mode_box = QComboBox()
-        names = QUICK_MODES + sorted(set(COPTER_MODES.values()) - set(QUICK_MODES))
-        self.mode_box.addItems(names)
         self.mode_box.setMinimumWidth(140)
         row.addWidget(self.mode_box)
         row.addWidget(button("Set mode", None, lambda: self.link.set_mode(self.mode_box.currentText())))
         row.addStretch()
-        row.addWidget(button("RTL", "ghost", lambda: self.link.set_mode("RTL")))
-        row.addWidget(button("Land", "ghost", lambda: self.link.set_mode("LAND")))
+        self.rtl_btn = button("RTL", "ghost", lambda: self.link.set_mode(self.link.firmware.rtl))
+        self.land_btn = button("Land", "ghost", lambda: self.link.set_mode(self.link.firmware.land[0]))
+        row.addWidget(self.rtl_btn)
+        row.addWidget(self.land_btn)
         self.arm_btn = button("Arm", "danger", self._toggle_arm)
         self.arm_btn.setMinimumWidth(110)
         row.addWidget(self.arm_btn)
@@ -119,42 +115,64 @@ class FlyPage(QWidget):
         split.addWidget(self.map)
         split.setSizes([620, 900])
         split.setStretchFactor(1, 1)
+        self._set_firmware(link.firmware)
+        link.firmware_changed.connect(self._set_firmware)
+
+    def _set_firmware(self, fw):
+        cur = self.mode_box.currentText()
+        self.mode_box.clear()
+        self.mode_box.addItems(fw.mode_names())
+        if fw.has_mode(cur):
+            self.mode_box.setCurrentText(cur)
+        self.rtl_btn.setVisible(bool(fw.rtl))
+        self.rtl_btn.setText(fw.rtl.replace("_", " ") if fw.rtl else "")
+        self.land_btn.setVisible(bool(fw.land))
+        if fw.land:
+            self.land_btn.setText(fw.land[1])
 
     # ---------- map right-click ----------
     def _map_menu(self, lat, lon):
         st = self.link.state
         menu = QMenu(self)
-        fly = menu.addAction("✈  Fly here (Guided)…")
+        fly = menu.addAction("✈  Go here (Guided)…")
         home = menu.addAction("⌂  Set home here")
         prev = menu.addAction("◎  Preview this spot in 3D")
         menu.addSeparator()
         menu.addAction(f"{lat:.6f}, {lon:.6f}").setEnabled(False)
-        fly.setEnabled(st.connected and st.armed)
-        if not st.armed:
-            fly.setText("✈  Fly here (Guided) — arm and take off first")
+        guided = self.link.firmware.guided
+        fly.setEnabled(bool(guided) and st.connected and st.armed)
+        if not guided:
+            fly.setText(f"✈  Go here — not available for {self.link.firmware.name}")
+        elif not st.armed:
+            fly.setText("✈  Go here (Guided) — arm first")
         home.setEnabled(st.connected)
         act = menu.exec(QCursor.pos())
         if act is fly:
             self._fly_here(lat, lon)
         elif act is home:
-            if QMessageBox.question(self, "Set home?", "Move the home / RTL point here?\nThe drone will return to "
-                                    "this spot on RTL.") == QMessageBox.Yes:
+            if QMessageBox.question(self, "Set home?", f"Move the home / RTL point here?\nThe "
+                                    f"{self.link.firmware.vehicle} will return to this spot on RTL.") == QMessageBox.Yes:
                 self.link.set_home(lat, lon, st.alt_msl - st.alt_rel)
         elif act is prev:
             self.preview3d.emit(lat, lon, max(st.alt_rel, 30))
 
     def _fly_here(self, lat, lon):
         st = self.link.state
-        alt, ok = QInputDialog.getDouble(self, "Fly here", "Altitude above home (m):",
-                                         max(round(st.alt_rel), 15), 2, 120, 0)
-        if not ok:
-            return
-        if st.mode != "GUIDED":
-            if QMessageBox.question(self, "Switch to Guided?",
-                                    f"The drone is in {st.mode}. Switch to GUIDED and fly to this point at "
-                                    f"{alt:.0f} m?") != QMessageBox.Yes:
+        fw = self.link.firmware
+        if fw.key == "copter":
+            alt, ok = QInputDialog.getDouble(self, "Fly here", "Altitude above home (m):",
+                                             max(round(st.alt_rel), 15), 2, 120, 0)
+            if not ok:
                 return
-            self.link.set_mode("GUIDED")
+            where = f"fly to this point at {alt:.0f} m"
+        else:
+            alt, where = 0.0, "drive to this point"
+        if st.mode != fw.guided:
+            if QMessageBox.question(self, f"Switch to {fw.guided}?",
+                                    f"The {fw.vehicle} is in {st.mode}. Switch to {fw.guided} and "
+                                    f"{where}?") != QMessageBox.Yes:
+                return
+            self.link.set_mode(fw.guided)
         self.link.guided_goto(lat, lon, alt)
         self.map.set_target(lat, lon)
 

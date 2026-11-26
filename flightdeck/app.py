@@ -5,6 +5,7 @@ from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QButtonGroup, QComboBox, QFrame, QHBoxLayout, QMainWindow, QSlider,
                                QStackedWidget, QToolButton, QVBoxLayout, QWidget)
 
+from . import firmware as fwmod
 from . import theme
 from .link import Link, serial_ports
 from .tileserver import TILES
@@ -51,6 +52,9 @@ class MainWindow(QMainWindow):
         if key:
             TILES.set_key("maptiler", key)
         self.link = Link()
+        saved = self.settings.value("firmware", "auto")
+        if saved in fwmod.ALL:
+            self.link.set_override(fwmod.ALL[saved])
 
         root = QWidget()
         root.setObjectName("Root")
@@ -80,6 +84,7 @@ class MainWindow(QMainWindow):
                  ("Ports", self.ports), ("Tune", self.tuning), ("Params", self.params), ("Graphs", self.graphs), ("Logs", self.logs),
                  ("Messages", self.msgs), ("Claude", self.claude)]
         body.addWidget(self._sidebar(pages))
+        self.pages = pages
         self.plan.preview3d.connect(self._open_3d)
         self.fly.preview3d.connect(self._open_3d)
         for _, p in pages:
@@ -111,6 +116,8 @@ class MainWindow(QMainWindow):
         self.glass.valueChanged.connect(lambda _: self._glass_timer.start())
         self._apply_glass()
 
+        self.link.firmware_changed.connect(self._firmware_changed)
+        self._firmware_changed(self.link.firmware)
         self.link.connection_changed.connect(self._conn_changed)
         self.link.statustext.connect(self._statustext)
         self.link.params_progress.connect(self._params_progress)
@@ -135,6 +142,10 @@ class MainWindow(QMainWindow):
         h.addWidget(label("Deck", "WordmarkAccent"))
         h.addSpacing(24)
 
+        self.p_fw = Pill("ARDUCOPTER")
+        self.p_fw.setCursor(Qt.PointingHandCursor)
+        self.p_fw.mousePressEvent = lambda e: self._firmware_menu()
+        h.addWidget(self.p_fw)
         self.p_link = Pill("OFFLINE")
         self.p_mode = Pill("MODE —")
         self.p_arm = Pill("DISARMED")
@@ -200,6 +211,67 @@ class MainWindow(QMainWindow):
         v.addStretch()
         return side
 
+    # ---------- firmware ----------
+    OPTIONAL_PAGES = ("Plan", "Ports", "Tune", "Params", "Logs")
+
+    def _firmware_changed(self, fw):
+        cur = self.stack.currentIndex()
+        for i, (name, _) in enumerate(self.pages):
+            show = name not in self.OPTIONAL_PAGES or name in fw.pages
+            self.nav_buttons[i].setVisible(show)
+            if not show and i == cur:
+                self.stack.setCurrentIndex(0)
+                self.nav_buttons[0].setChecked(True)
+        self._update_fw_pill()
+
+    def _update_fw_pill(self):
+        L = self.link
+        fw = L.firmware
+        mismatch = L.override is not None and L.detected is not None and L.override is not L.detected
+        text = fw.name.upper() + (" · MANUAL" if L.override else "")
+        self.p_fw.set(text, "warn" if mismatch else "accent")
+        tip = f"Firmware: {fw.name}"
+        if L.override:
+            tip += " (chosen by you)"
+        if L.detected_text:
+            tip += f"\nThe vehicle reports: {L.detected_text}"
+        if mismatch:
+            tip += "\nThis doesn't match what the vehicle reports. Modes and settings may be wrong."
+        self.p_fw.setToolTip(tip + "\nClick to change.")
+
+    def _firmware_menu(self):
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        L = self.link
+        menu = QMenu(self)
+        auto = menu.addAction("Automatic" + (f"  (vehicle reports {L.detected_text})" if L.detected_text else
+                                             "  (detect when connected)"))
+        auto.setCheckable(True)
+        auto.setChecked(L.override is None)
+        menu.addSeparator()
+        acts = {}
+        for fw in fwmod.ALL.values():
+            a = menu.addAction(fw.name)
+            a.setCheckable(True)
+            a.setChecked(L.override is fw)
+            acts[a] = fw
+        act = menu.exec(QCursor.pos())
+        if act is None:
+            return
+        fw = acts.get(act)
+        if fw is not None and L.detected is not None and fw is not L.detected:
+            from PySide6.QtWidgets import QMessageBox
+            if QMessageBox.warning(self, "Firmware doesn't match",
+                                   f"The connected vehicle reports {L.detected_text}, not {fw.name}.\n\n"
+                                   "With the wrong firmware selected, mode names and Setup pages will be wrong "
+                                   "and could write the wrong values. Use it anyway?",
+                                   QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                return
+        L.set_override(fw)
+        self.settings.setValue("firmware", fw.key if fw else "auto")
+        self._update_fw_pill()
+        self.show_status(f"Firmware: {L.firmware.name}" + (" (manual)" if fw else " (automatic)"))
+
     def _refresh_ports(self):
         ports = list_serial()
         current = self.port_box.currentText()
@@ -240,6 +312,7 @@ class MainWindow(QMainWindow):
 
     def _conn_changed(self, ok, msg):
         self.show_status(msg)
+        self._update_fw_pill()
         if not self.link.is_open and msg == "Disconnected":
             self.conn_btn.setText("Connect")
             self.conn_btn.setProperty("kind", "primary")

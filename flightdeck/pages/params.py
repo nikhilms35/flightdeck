@@ -1,3 +1,4 @@
+import gzip
 import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, QSortFilterProxyModel, Qt
@@ -11,12 +12,28 @@ from ..theme import ASSETS, T
 from ..widgets import Card, button, label
 
 
-def load_metadata():
+_META_CACHE = {}
+
+
+def load_metadata(fw=None):
+    """Parameter descriptions for a firmware (bundled ArduPilot pdef files). Empty dict when there are none."""
+    from ..firmware import DEFAULT
+    fw = fw or DEFAULT
+    if fw.pdef in _META_CACHE:
+        return dict(_META_CACHE[fw.pdef])
     meta = {}
-    path = ASSETS / "ArduCopter.apm.pdef.xml"
-    if not path.exists():
+    path = ASSETS / fw.pdef if fw.pdef else None
+    if path is None or not path.exists():
         return meta
-    for _, el in ET.iterparse(path, events=("end",)):
+    with gzip.open(path) if path.suffix == ".gz" else open(path, "rb") as fh:
+        meta = _parse(fh)
+    _META_CACHE[fw.pdef] = meta
+    return dict(meta)
+
+
+def _parse(fh):
+    meta = {}
+    for _, el in ET.iterparse(fh, events=("end",)):
         if el.tag != "param":
             continue
         name = el.get("name", "").split(":")[-1]
@@ -210,8 +227,9 @@ class ParamsPage(QWidget):
         super().__init__()
         self.link = link
         self.status = status
-        self.meta = load_metadata()
+        self.meta = load_metadata(link.firmware)   # shared with Tune and Ports; updated in place
         self.model = ParamModel(link, self.meta)
+        link.firmware_changed.connect(self._firmware_changed)
         self.proxy = Filter(self.model)
 
         v = QVBoxLayout(self)
@@ -294,6 +312,11 @@ class ParamsPage(QWidget):
         self._update_pending()
 
     # ---------- events ----------
+    def _firmware_changed(self, fw):
+        self.meta.clear()
+        self.meta.update(load_metadata(fw))
+        self._loaded()
+
     def _progress(self, n, total):
         self.count_lbl.setText(f"Downloading {n}/{total}…" if total and n < total else "")
 
